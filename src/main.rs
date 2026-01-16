@@ -47,6 +47,8 @@ struct ConceptFluid {
     total_integration: f32, // System-wide accumulated internal heat
     evaporation_threshold: f32, // Integration level needed to evaporate (e.g., 3.0)
     evaporation_zone: f32, // Layer depth for evaporation (near surface, e.g., 0.15)
+    salinity: f32,    // Accumulated knowledge density - increases baseline fluid density
+    salinity_rate: f32, // How fast integration increases salinity
     num_layers: usize, // For visualization/bucketing
 }
 
@@ -83,6 +85,8 @@ impl ConceptFluid {
             total_integration: 0.0,
             evaporation_threshold,
             evaporation_zone,
+            salinity: 0.0,      // Starts at 0, increases with knowledge
+            salinity_rate: 0.1, // Default rate
             num_layers,
         }
     }
@@ -278,9 +282,19 @@ impl ConceptFluid {
             let target_layer = 1.0 - concept.buoyancy;
             let diff = target_layer - concept.layer;
 
+            // Salinity effect: denser fluid makes light concepts float MORE easily
+            // Effective buoyancy increases for low-density concepts in salty fluid
+            let salinity_boost = if concept.density < 0.5 {
+                // Light thoughts get MUCH more buoyant in dense (salty/knowledgeable) fluid
+                self.salinity * (0.5 - concept.density) * 2.0
+            } else {
+                0.0
+            };
+
             // Buoyancy force (drives toward target position)
             // Positive force = tendency to sink, negative = tendency to rise
-            let buoyancy_force = diff * concept.density;
+            // Salinity makes light thoughts RISE (negative force)
+            let buoyancy_force = diff * concept.density - salinity_boost;
 
             // Drag force: Fd = 0.5 * ρ * v^2 * Cd * A
             // Opposes motion (sign opposite to velocity)
@@ -399,6 +413,19 @@ impl ConceptFluid {
             self.damping_factor = 0.0;
         }
 
+        // Salinity: Integration increases fluid density (accumulated knowledge)
+        let integration_this_frame = self.total_integration;
+        let prev_salinity = self.salinity;
+        self.salinity += integration_this_frame * self.salinity_rate * dt;
+
+        // Report salinity increases
+        if self.salinity - prev_salinity > 0.5 {
+            println!(
+                "🧂 SALINITY INCREASE: {:.2} → {:.2} (knowledge accumulating in the fluid)",
+                prev_salinity, self.salinity
+            );
+        }
+
         // Evaporation: highly integrated concepts at/near surface become traits
         let mut evaporated_ids = Vec::new();
         for (id, concept) in &self.concepts {
@@ -468,6 +495,18 @@ impl ConceptFluid {
         }
         if self.damping_factor > 0.01 {
             println!("🫁 Active damping: {:.2}", self.damping_factor);
+        }
+        if self.salinity > 0.5 {
+            let salinity_level = if self.salinity > 5.0 {
+                "DEAD SEA - almost nothing sinks!"
+            } else if self.salinity > 3.0 {
+                "OCEAN - dense with knowledge"
+            } else if self.salinity > 1.0 {
+                "BRACKISH - accumulating experience"
+            } else {
+                "SLIGHTLY SALTY"
+            };
+            println!("🧂 SALINITY: {:.2} ({})", self.salinity, salinity_level);
         }
         if !self.atmosphere.is_empty() {
             println!(
