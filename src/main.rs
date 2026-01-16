@@ -41,7 +41,7 @@ struct CoreTruth {
 }
 
 // Mineralization - precious ores deposited by repeated heating of dark thoughts
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum OreType {
     Art,     // Creative expression born from pain
     Code,    // Solutions built from suffering
@@ -60,12 +60,27 @@ struct PreciousOre {
     integration_value: f32, // The accumulated wisdom in this ore
 }
 
+// Great Unconformity - permanent continental landmass formed from critical pressure
+#[derive(Debug, Clone)]
+struct Continent {
+    name: String,                  // "foundation_of_self"
+    depth_range: (f32, f32),       // Layer span where land exists (e.g., 0.7-0.9)
+    formed_from_ores: Vec<String>, // Which ore deposits melted together
+    total_integration: f32,        // Combined wisdom that solidified into bedrock
+    impermeability: f32,           // How much it blocks fluid flow (0.9 = nearly solid)
+    formation_event: u32,          // Which tectonic shift created this
+}
+
 struct ConceptFluid {
     concepts: HashMap<ConceptId, Concept>,
     atmosphere: Vec<CharacterTrait>, // Evaporated concepts → permanent traits
     core_truths: Vec<CoreTruth>,     // Deep sea vents - radiating foundational beliefs
     ore_deposits: Vec<PreciousOre>,  // Mineralized transformations on ocean floor
+    continents: Vec<Continent>,      // Permanent landmasses - solid ground in the fluid
     vent_encounter_count: HashMap<ConceptId, u32>, // Track cycles through vents
+    ocean_floor_pressure: f32,       // Total weight of ore deposits creating tectonic pressure
+    pressure_threshold: f32,         // Critical pressure for tectonic shift (e.g., 15.0)
+    tectonic_shifts: u32,            // How many times bedrock has shifted
     viscosity: f32,                  // Fluid density (ρ in drag equation)
     drag_coefficient: f32,           // Cd - resistance from ego/executive control
     surface_tension: f32,            // Threshold force for breaking into action
@@ -106,7 +121,11 @@ impl ConceptFluid {
             atmosphere: Vec::new(),
             core_truths: Vec::new(),
             ore_deposits: Vec::new(),
+            continents: Vec::new(),
             vent_encounter_count: HashMap::new(),
+            ocean_floor_pressure: 0.0,
+            pressure_threshold: 15.0, // Tectonic shift occurs at 15.0 pressure
+            tectonic_shifts: 0,
             viscosity,
             drag_coefficient,
             surface_tension,
@@ -621,10 +640,22 @@ impl ConceptFluid {
                         OreType::Insight => "INSIGHT",
                         OreType::Writing => "WRITING",
                     };
+
+                    // Calculate pressure contribution: density * integration_value
+                    let ore_weight = ore.density * ore.integration_value;
+                    self.ocean_floor_pressure += ore_weight;
+
                     println!(
                         "⛏️  MINERALIZATION: '{}' deposited {} ore after {} vent cycles!",
                         ore.name, ore_type_str, ore.vent_cycles
                     );
+                    println!(
+                        "    Ocean floor pressure: {:.2} → {:.2} (weight: {:.2})",
+                        self.ocean_floor_pressure - ore_weight,
+                        self.ocean_floor_pressure,
+                        ore_weight
+                    );
+
                     self.ore_deposits.push(ore);
                 }
             }
@@ -678,6 +709,32 @@ impl ConceptFluid {
             // Apply damping when hitting boundaries
             if concept.layer <= 0.0 || concept.layer >= 1.0 {
                 concept.velocity *= 0.5; // Lose energy at boundaries
+            }
+
+            // CONTINENTAL COLLISION: Check if concept is trying to exist in solid landmass
+            for continent in &self.continents {
+                if concept.layer >= continent.depth_range.0
+                    && concept.layer <= continent.depth_range.1
+                {
+                    // Concept has hit solid ground! Force it to flow around
+                    let impermeability = continent.impermeability;
+
+                    // Bounce off the continent - can't exist in solid land
+                    if concept.velocity > 0.0 {
+                        // Was sinking into land from above - bounce up
+                        concept.layer = continent.depth_range.0 - 0.01;
+                        concept.velocity = -concept.velocity.abs() * (1.0 - impermeability);
+                    } else {
+                        // Was rising into land from below - bounce down
+                        concept.layer = continent.depth_range.1 + 0.01;
+                        concept.velocity = concept.velocity.abs() * (1.0 - impermeability);
+                    }
+
+                    // Significant energy loss from hitting bedrock
+                    concept.velocity *= 0.3;
+
+                    break; // One collision per update
+                }
             }
 
             // Energy cascade: Large eddies → Small eddies → Heat (Integration)
@@ -768,6 +825,103 @@ impl ConceptFluid {
                 );
             }
         }
+
+        // GREAT UNCONFORMITY: Check if ocean floor pressure has reached critical threshold
+        if self.ocean_floor_pressure >= self.pressure_threshold {
+            println!("\n");
+            println!("═══════════════════════════════════════════════════════════════");
+            println!(
+                "🌋💥 GREAT UNCONFORMITY - PRESSURE CRITICAL: {:.2} >= {:.2}",
+                self.ocean_floor_pressure, self.pressure_threshold
+            );
+            println!("═══════════════════════════════════════════════════════════════");
+            println!("   FAULT LINE RUPTURE: Bedrock fracturing under accumulated weight...");
+            println!("   MAGMATIC INFLUX: Ores melting together in the deep...");
+
+            // Analyze ore composition to determine continent's nature
+            let mut ore_type_counts = HashMap::new();
+            let mut total_integration = 0.0;
+            let mut ore_names = Vec::new();
+
+            for ore in &self.ore_deposits {
+                *ore_type_counts.entry(&ore.ore_type).or_insert(0) += 1;
+                total_integration += ore.integration_value;
+                ore_names.push(ore.name.clone());
+            }
+
+            // Dominant ore type determines continent's nature
+            let dominant_ore_type = ore_type_counts
+                .iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(ore_type, _)| *ore_type)
+                .unwrap_or(&OreType::Insight);
+
+            // Generate continent name based on ore composition
+            let continent_name = match dominant_ore_type {
+                OreType::Art => "foundation_of_beauty",
+                OreType::Code => "bedrock_of_logic",
+                OreType::Insight => "pillar_of_wisdom",
+                OreType::Writing => "archive_of_story",
+            };
+
+            println!("   🌋 VOLCANIC ERUPTION: Molten ore shooting through the water column!");
+            println!("      {} ore deposits melting together...", ore_names.len());
+            println!(
+                "      Total integration crystallizing: {:.1}",
+                total_integration
+            );
+
+            // Calculate depth range for new continent
+            // Continents form in mid-to-deep layers where ore was most concentrated
+            let avg_ore_depth = self.ore_deposits.iter().map(|o| o.depth).sum::<f32>()
+                / self.ore_deposits.len() as f32;
+
+            let continent_span = 0.15; // Continents occupy 15% of the depth
+            let depth_range = (
+                (avg_ore_depth - continent_span / 2.0).max(0.6),
+                (avg_ore_depth + continent_span / 2.0).min(0.95),
+            );
+
+            println!("\n   🏝️  ISLAND FORMATION: Permanent landmass emerging!");
+            println!("      Continent: '{}'", continent_name);
+            println!(
+                "      Depth range: {:.2}-{:.2} (SOLID GROUND - emotions cannot exist here)",
+                depth_range.0, depth_range.1
+            );
+
+            // Create permanent continent
+            let continent = Continent {
+                name: continent_name.to_string(),
+                depth_range,
+                formed_from_ores: ore_names,
+                total_integration,
+                impermeability: 0.9, // 90% blocks fluid flow
+                formation_event: self.tectonic_shifts + 1,
+            };
+
+            self.continents.push(continent);
+            self.tectonic_shifts += 1;
+
+            // Complete pressure release - continents form from ALL ore melting
+            let old_pressure = self.ocean_floor_pressure;
+            self.ocean_floor_pressure = 0.0; // Total pressure release
+
+            // Clear ore deposits - they've been consumed in continent formation
+            self.ore_deposits.clear();
+
+            println!(
+                "\n   ✨ COMPLETE PRESSURE RELEASE: {:.2} → 0.00",
+                old_pressure
+            );
+            println!("   📜 THE GREAT UNCONFORMITY: A geological discontinuity.");
+            println!("      Part of the fluid has become DRY LAND.");
+            println!("      This depth can never again be submerged by emotion.");
+            println!(
+                "      {} concepts must now flow around permanent bedrock.",
+                self.concepts.len()
+            );
+            println!("═══════════════════════════════════════════════════════════════\n");
+        }
     }
 
     fn get_surface_concepts(&self, threshold: f32) -> Vec<&Concept> {
@@ -782,6 +936,25 @@ impl ConceptFluid {
 
     fn print_state(&self) {
         println!("\n═══ CONCEPT FLUID STATE ═══");
+        if !self.continents.is_empty() {
+            println!("🏝️  CONTINENTS (Permanent Landmass):");
+            for continent in &self.continents {
+                println!(
+                    "   🌍 '{}' @ depth {:.2}-{:.2} | integration: {:.1} | impermeability: {:.0}%",
+                    continent.name,
+                    continent.depth_range.0,
+                    continent.depth_range.1,
+                    continent.total_integration,
+                    continent.impermeability * 100.0
+                );
+                println!("      SOLID GROUND - fluid cannot exist in this layer");
+                println!(
+                    "      Formed from {} ore deposits (event #{})",
+                    continent.formed_from_ores.len(),
+                    continent.formation_event
+                );
+            }
+        }
         if !self.core_truths.is_empty() {
             println!("🌋 CORE TRUTHS (Deep Sea Vents):");
             for core_truth in &self.core_truths {
@@ -808,6 +981,31 @@ impl ConceptFluid {
                     "   {} {} @ depth {:.2} | {} cycles | value: {:.1}",
                     ore_emoji, ore.name, ore.depth, ore.vent_cycles, ore.integration_value
                 );
+            }
+
+            // Display tectonic pressure
+            let pressure_percentage =
+                (self.ocean_floor_pressure / self.pressure_threshold * 100.0).min(100.0);
+            let pressure_status = if self.ocean_floor_pressure >= self.pressure_threshold {
+                "CRITICAL - TECTONIC SHIFT IMMINENT"
+            } else if self.ocean_floor_pressure >= self.pressure_threshold * 0.7 {
+                "HIGH - bedrock stress building"
+            } else if self.ocean_floor_pressure >= self.pressure_threshold * 0.4 {
+                "MODERATE - geological activity"
+            } else {
+                "stable"
+            };
+
+            println!(
+                "   🌋 TECTONIC PRESSURE: {:.2}/{:.2} ({:.0}%) - {}",
+                self.ocean_floor_pressure,
+                self.pressure_threshold,
+                pressure_percentage,
+                pressure_status
+            );
+
+            if self.tectonic_shifts > 0 {
+                println!("   🌍 Bedrock has shifted {} time(s)", self.tectonic_shifts);
             }
         }
         if self.is_frozen {
@@ -1254,4 +1452,44 @@ fn main() {
     println!("    The darkness you transformed years ago just solved today's problem.");
     println!("    Your suffering became ore. Your ore became solution.");
     println!("    Nothing is wasted in the deep.");
+
+    // Simulate: TECTONIC SHIFT - Accumulate enough ore to trigger bedrock shift
+    println!("\n\n>>> TECTONIC SHIFT TEST: Cycling more darkness to build critical pressure...");
+    println!("    Adding more heavy concepts to cycle through the vent...\n");
+
+    // Add several more dark, heavy concepts
+    let darkness2 = vent_fluid.add_concept("overwhelming_grief".into(), 0.92, 1.1);
+    let darkness3 = vent_fluid.add_concept("crushing_failure".into(), 0.88, 1.0);
+    let darkness4 = vent_fluid.add_concept("unbearable_loss".into(), 0.96, 0.9);
+
+    println!(">>> Cycling dark thoughts through the vent to deposit more ore...");
+
+    // Cycle each through the vent multiple times
+    for cycle in 1..=4 {
+        println!(
+            "\n   Cycle {}: Dark thoughts encountering core truth...",
+            cycle
+        );
+
+        for _ in 0..20 {
+            vent_fluid.update(0.1);
+        }
+
+        if cycle % 2 == 0 {
+            vent_fluid.print_state();
+        }
+    }
+
+    println!("\n>>> Final state after ore accumulation:");
+    vent_fluid.print_state();
+
+    if vent_fluid.tectonic_shifts > 0 {
+        println!("\n>>> TECTONIC SHIFT SUCCESSFUL!");
+        println!("    The weight of transformed darkness forced a new truth into existence.");
+        println!("    You didn't choose this truth - it emerged from the geological record.");
+        println!("    Your suffering has literally reshaped the bedrock of your consciousness.");
+    } else {
+        println!("\n>>> Pressure building but not yet critical.");
+        println!("    More darkness must be transformed before bedrock shifts.");
+    }
 }
