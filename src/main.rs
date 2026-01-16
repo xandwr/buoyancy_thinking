@@ -38,10 +38,32 @@ struct CoreTruth {
     activation_count: u32, // Strengthens each time concepts encounter it
 }
 
+// Mineralization - precious ores deposited by repeated heating of dark thoughts
+#[derive(Debug, Clone, PartialEq)]
+enum OreType {
+    Art,     // Creative expression born from pain
+    Code,    // Solutions built from suffering
+    Insight, // Wisdom crystallized from darkness
+    Writing, // Stories forged in the deep
+}
+
+#[derive(Debug, Clone)]
+struct PreciousOre {
+    name: String,           // "despair_transformed_to_music"
+    ore_type: OreType,      // What form the transformation took
+    density: f32,           // Heavy - stays on ocean floor (0.8-1.0)
+    depth: f32,             // Where it deposited (near the vent)
+    formed_from: ConceptId, // Which dark thought created this
+    vent_cycles: u32,       // How many times parent passed through heat
+    integration_value: f32, // The accumulated wisdom in this ore
+}
+
 struct ConceptFluid {
     concepts: HashMap<ConceptId, Concept>,
     atmosphere: Vec<CharacterTrait>, // Evaporated concepts → permanent traits
     core_truths: Vec<CoreTruth>,     // Deep sea vents - radiating foundational beliefs
+    ore_deposits: Vec<PreciousOre>,  // Mineralized transformations on ocean floor
+    vent_encounter_count: HashMap<ConceptId, u32>, // Track cycles through vents
     viscosity: f32,                  // Fluid density (ρ in drag equation)
     drag_coefficient: f32,           // Cd - resistance from ego/executive control
     surface_tension: f32,            // Threshold force for breaking into action
@@ -81,6 +103,8 @@ impl ConceptFluid {
             concepts: HashMap::new(),
             atmosphere: Vec::new(),
             core_truths: Vec::new(),
+            ore_deposits: Vec::new(),
+            vent_encounter_count: HashMap::new(),
             viscosity,
             drag_coefficient,
             surface_tension,
@@ -395,6 +419,9 @@ impl ConceptFluid {
 
             // Thermal plume force from core truths (hydrothermal vents)
             let mut thermal_force = 0.0;
+            let mut mineralization_triggered = false;
+            let mut ore_to_deposit: Option<PreciousOre> = None;
+
             for core_truth in &mut self.core_truths {
                 // Distance from concept to core truth
                 let depth_diff = (concept.layer - core_truth.depth).abs();
@@ -418,7 +445,59 @@ impl ConceptFluid {
                         // Heavy concepts strengthen it more
                         let strengthening = concept.density * 0.01;
                         core_truth.heat_output += strengthening;
+
+                        // MINERALIZATION: Track vent encounters for dark thoughts
+                        // Dark/heavy concepts (density > 0.7) deposit ore when cycled through heat
+                        if concept.density > 0.7 {
+                            let encounters =
+                                self.vent_encounter_count.entry(concept.id).or_insert(0);
+                            *encounters += 1;
+
+                            // Every 3 cycles through the vent, deposit a precious ore
+                            if *encounters % 3 == 0 && *encounters > 0 {
+                                mineralization_triggered = true;
+
+                                // Determine ore type based on concept properties and cycles
+                                let ore_type = if *encounters >= 9 {
+                                    OreType::Insight // Deep wisdom after many cycles
+                                } else if concept.integration > 1.0 {
+                                    OreType::Writing // Integrated experiences become stories
+                                } else if concept.area > 0.8 {
+                                    OreType::Art // High connectivity → creative expression
+                                } else {
+                                    OreType::Code // Problem-solving from suffering
+                                };
+
+                                ore_to_deposit = Some(PreciousOre {
+                                    name: format!("{}_ore_{}", concept.name, *encounters / 3),
+                                    ore_type,
+                                    density: 0.9, // Heavy - stays on ocean floor
+                                    depth: core_truth.depth, // Deposits near the vent
+                                    formed_from: concept.id,
+                                    vent_cycles: *encounters,
+                                    integration_value: concept.integration
+                                        + (*encounters as f32 * 0.5),
+                                });
+                            }
+                        }
                     }
+                }
+            }
+
+            // Deposit ore after loop to avoid borrow issues
+            if mineralization_triggered {
+                if let Some(ore) = ore_to_deposit {
+                    let ore_type_str = match ore.ore_type {
+                        OreType::Art => "ART",
+                        OreType::Code => "CODE",
+                        OreType::Insight => "INSIGHT",
+                        OreType::Writing => "WRITING",
+                    };
+                    println!(
+                        "⛏️  MINERALIZATION: '{}' deposited {} ore after {} vent cycles!",
+                        ore.name, ore_type_str, ore.vent_cycles
+                    );
+                    self.ore_deposits.push(ore);
                 }
             }
 
@@ -585,6 +664,21 @@ impl ConceptFluid {
                     core_truth.heat_output,
                     core_truth.radius,
                     core_truth.activation_count
+                );
+            }
+        }
+        if !self.ore_deposits.is_empty() {
+            println!("⛏️  PRECIOUS ORE DEPOSITS (Ocean Floor):");
+            for ore in &self.ore_deposits {
+                let ore_emoji = match ore.ore_type {
+                    OreType::Art => "🎨",
+                    OreType::Code => "💻",
+                    OreType::Insight => "💎",
+                    OreType::Writing => "📖",
+                };
+                println!(
+                    "   {} {} @ depth {:.2} | {} cycles | value: {:.1}",
+                    ore_emoji, ore.name, ore.depth, ore.vent_cycles, ore.integration_value
                 );
             }
         }
