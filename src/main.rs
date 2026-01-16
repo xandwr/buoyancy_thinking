@@ -1,0 +1,714 @@
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ConceptId(u32);
+
+#[derive(Debug, Clone)]
+struct Concept {
+    id: ConceptId,
+    name: String,
+    density: f32,             // Intrinsic weight (0.0 to 1.0)
+    buoyancy: f32,            // Current effective buoyancy
+    layer: f32,               // Continuous depth (0.0 = surface, 1.0 = bottom)
+    velocity: f32,            // Rate of layer change (positive = sinking, negative = rising)
+    area: f32,                // "Surface area" - how many concepts this touches (connectivity)
+    has_broken_surface: bool, // Has this concept triggered an action?
+    time_at_surface: f32,     // How long this concept has been at the surface (layer ≈ 0)
+    is_frozen: bool,          // Is this concept causing a freeze?
+    integration: f32,         // "Internal heat" - accumulated understanding/memory
+    eddy_scale: f32,          // Current eddy size (large spike → smaller reflections)
+    has_evaporated: bool,     // Has this concept left the fluid to become a trait?
+}
+
+// Evaporated concepts become permanent character traits
+#[derive(Debug, Clone)]
+struct CharacterTrait {
+    name: String,
+    integration: f32,       // How much understanding went into this trait
+    formed_from: ConceptId, // Which concept evaporated to form this
+}
+
+struct ConceptFluid {
+    concepts: HashMap<ConceptId, Concept>,
+    atmosphere: Vec<CharacterTrait>, // Evaporated concepts → permanent traits
+    viscosity: f32,                  // Fluid density (ρ in drag equation)
+    drag_coefficient: f32,           // Cd - resistance from ego/executive control
+    surface_tension: f32,            // Threshold force for breaking into action
+    activation_zone: f32,            // Layer depth where surface tension applies (e.g., 0.1)
+    freeze_threshold: f32,           // Time at surface before freeze occurs (seconds)
+    freeze_zone: f32, // Layer depth considered "at surface" for freezing (e.g., 0.05)
+    is_frozen: bool,  // Is the entire fluid frozen?
+    frozen_concept: Option<ConceptId>, // Which concept caused the freeze
+    reynolds_threshold: f32, // Re threshold for turbulence (e.g., 50.0)
+    is_turbulent: bool, // Is the fluid in turbulent state?
+    turbulence_energy: f32, // Current turbulence energy level
+    turbulence_decay: f32, // Rate at which turbulence decays
+    damping_factor: f32, // "Deep breath" - active damping to restore calm
+    total_integration: f32, // System-wide accumulated internal heat
+    evaporation_threshold: f32, // Integration level needed to evaporate (e.g., 3.0)
+    evaporation_zone: f32, // Layer depth for evaporation (near surface, e.g., 0.15)
+    num_layers: usize, // For visualization/bucketing
+}
+
+impl ConceptFluid {
+    fn new(
+        viscosity: f32,
+        drag_coefficient: f32,
+        surface_tension: f32,
+        activation_zone: f32,
+        freeze_threshold: f32,
+        freeze_zone: f32,
+        reynolds_threshold: f32,
+        turbulence_decay: f32,
+        num_layers: usize,
+        evaporation_threshold: f32,
+        evaporation_zone: f32,
+    ) -> Self {
+        Self {
+            concepts: HashMap::new(),
+            atmosphere: Vec::new(),
+            viscosity,
+            drag_coefficient,
+            surface_tension,
+            activation_zone,
+            freeze_threshold,
+            freeze_zone,
+            is_frozen: false,
+            frozen_concept: None,
+            reynolds_threshold,
+            is_turbulent: false,
+            turbulence_energy: 0.0,
+            turbulence_decay,
+            damping_factor: 0.0, // Starts at 0, activated when needed
+            total_integration: 0.0,
+            evaporation_threshold,
+            evaporation_zone,
+            num_layers,
+        }
+    }
+
+    fn add_concept(&mut self, name: String, density: f32, area: f32) -> ConceptId {
+        let id = ConceptId(self.concepts.len() as u32);
+        let concept = Concept {
+            id,
+            name,
+            density,
+            buoyancy: density,         // Start with buoyancy = density
+            layer: density,            // Initial layer matches density
+            velocity: 0.0,             // Start at rest
+            area,                      // Connectivity/surface area
+            has_broken_surface: false, // Not yet activated
+            time_at_surface: 0.0,      // No time at surface yet
+            is_frozen: false,          // Not frozen
+            integration: 0.0,          // No accumulated understanding yet
+            eddy_scale: 0.0,           // No turbulent motion yet
+            has_evaporated: false,     // Still in fluid state
+        };
+        self.concepts.insert(id, concept);
+        id
+    }
+
+    fn modulate_buoyancy(&mut self, id: ConceptId, delta: f32) {
+        if let Some(concept) = self.concepts.get_mut(&id) {
+            // Damp external boosts based on density (denser concepts resist change more)
+            let effective_delta = delta * (1.0 - concept.density);
+            concept.buoyancy = (concept.buoyancy + effective_delta).clamp(0.0, 1.0);
+
+            // Apply an immediate impulse to velocity (urgency of the drive)
+            // This represents the "intensification" - sudden changes create velocity
+            concept.velocity += effective_delta * 2.0; // Scale factor for impulse strength
+        }
+    }
+
+    // Thaw the frozen fluid (external intervention - e.g., user interaction)
+    fn thaw(&mut self) {
+        if self.is_frozen {
+            println!("🌊 THAW: External intervention breaking the freeze!");
+            self.is_frozen = false;
+
+            // Reset the frozen concept
+            if let Some(frozen_id) = self.frozen_concept {
+                if let Some(concept) = self.concepts.get_mut(&frozen_id) {
+                    concept.is_frozen = false;
+                    concept.time_at_surface = 0.0;
+                    // Apply downward impulse to dislodge it
+                    concept.velocity += 0.5; // Push away from surface
+                }
+            }
+
+            self.frozen_concept = None;
+        }
+    }
+
+    // Deep breath - active damping to restore laminar flow
+    fn deep_breath(&mut self, strength: f32) {
+        println!(
+            "🫁 DEEP BREATH: Actively damping to restore calm (strength: {:.1})",
+            strength
+        );
+        self.damping_factor = strength;
+
+        // Immediately reduce turbulence energy
+        if self.is_turbulent {
+            self.turbulence_energy *= 1.0 - strength;
+        }
+    }
+
+    // Precipitation - character trait influences new thought formation
+    fn precipitate(
+        &mut self,
+        trait_index: usize,
+        new_concept_name: String,
+        density: f32,
+        area: f32,
+    ) {
+        if trait_index >= self.atmosphere.len() {
+            return;
+        }
+
+        let trait_obj = &self.atmosphere[trait_index];
+
+        println!(
+            "🌧️  PRECIPITATION: Trait '{}' is influencing a new thought: '{}'",
+            trait_obj.name, new_concept_name
+        );
+
+        // Create new concept influenced by the trait
+        let id = ConceptId(self.concepts.len() as u32);
+        let concept = Concept {
+            id,
+            name: new_concept_name,
+            density,
+            buoyancy: density,
+            layer: 1.0,    // Start at bottom (raining down from atmosphere)
+            velocity: 0.5, // Initial downward velocity from precipitation
+            area,
+            has_broken_surface: false,
+            time_at_surface: 0.0,
+            is_frozen: false,
+            integration: trait_obj.integration * 0.3, // Inherit some integration from trait
+            eddy_scale: 0.0,
+            has_evaporated: false,
+        };
+
+        self.concepts.insert(id, concept);
+    }
+
+    fn update(&mut self, dt: f32) {
+        // First pass: track time at surface and detect freezing
+        let mut freeze_triggered = false;
+        let mut freezing_concept_id: Option<ConceptId> = None;
+
+        for concept in self.concepts.values_mut() {
+            // Track time at surface (in freeze zone)
+            if concept.layer < self.freeze_zone {
+                concept.time_at_surface += dt;
+
+                // Check for freeze trigger
+                if concept.time_at_surface >= self.freeze_threshold && !concept.is_frozen {
+                    concept.is_frozen = true;
+                    freeze_triggered = true;
+                    freezing_concept_id = Some(concept.id);
+                    println!(
+                        "❄️  FREEZE: '{}' has dominated consciousness for {:.1}s - fluid freezing!",
+                        concept.name, concept.time_at_surface
+                    );
+                }
+            } else {
+                // Reset timer if concept leaves surface
+                concept.time_at_surface = 0.0;
+                concept.is_frozen = false;
+            }
+        }
+
+        // Update global freeze state
+        if freeze_triggered {
+            self.is_frozen = true;
+            self.frozen_concept = freezing_concept_id;
+        }
+
+        // Calculate Reynolds number: Re = ρ * v * L / μ
+        // ρ = density (use 1.0), v = average velocity, L = characteristic length (use 1.0)
+        // μ = dynamic viscosity (self.viscosity)
+        let avg_velocity: f32 = self
+            .concepts
+            .values()
+            .map(|c| c.velocity.abs())
+            .sum::<f32>()
+            / self.concepts.len().max(1) as f32;
+
+        let reynolds_number = avg_velocity / self.viscosity;
+
+        // Check for turbulence onset
+        if reynolds_number > self.reynolds_threshold && !self.is_turbulent {
+            self.is_turbulent = true;
+            self.turbulence_energy = reynolds_number / self.reynolds_threshold;
+            println!(
+                "🌪️  TURBULENCE: Re={:.1} exceeded threshold {:.1} - thoughts swirling chaotically!",
+                reynolds_number, self.reynolds_threshold
+            );
+        }
+
+        // Turbulence decay
+        if self.is_turbulent {
+            self.turbulence_energy *= 1.0 - self.turbulence_decay * dt;
+            if self.turbulence_energy < 0.1 {
+                self.is_turbulent = false;
+                self.turbulence_energy = 0.0;
+                println!("🌊 CALM: Turbulence has subsided, thoughts settling...");
+            }
+        }
+
+        // Second pass: apply physics (or freeze/turbulence mechanics)
+        for concept in self.concepts.values_mut() {
+            // When frozen, block all non-frozen concepts from rising
+            if self.is_frozen && !concept.is_frozen {
+                // Apply massive downward force to other concepts
+                // They cannot break through the frozen thought
+                let freeze_suppression = 2.0; // Strength of suppression
+                concept.velocity = concept.velocity.min(0.0); // Kill upward velocity
+                concept.velocity += freeze_suppression * dt; // Push down
+                concept.layer = (concept.layer + concept.velocity * dt).clamp(0.0, 1.0);
+                continue; // Skip normal physics for suppressed concepts
+            }
+
+            // Target layer is where buoyancy would naturally place it
+            // Lower buoyancy = sink (higher layer value)
+            // Higher buoyancy = float (lower layer value)
+            let target_layer = 1.0 - concept.buoyancy;
+            let diff = target_layer - concept.layer;
+
+            // Buoyancy force (drives toward target position)
+            // Positive force = tendency to sink, negative = tendency to rise
+            let buoyancy_force = diff * concept.density;
+
+            // Drag force: Fd = 0.5 * ρ * v^2 * Cd * A
+            // Opposes motion (sign opposite to velocity)
+            let drag_force = if concept.velocity.abs() > 0.001 {
+                -0.5 * self.viscosity
+                    * concept.velocity.powi(2)
+                    * self.drag_coefficient
+                    * concept.area
+                    * concept.velocity.signum()
+            } else {
+                0.0
+            };
+
+            // Surface tension force - pushes concepts back down when near surface
+            // Only applies in the activation zone and when moving upward
+            let surface_force = if concept.layer < self.activation_zone && concept.velocity < 0.0 {
+                // Stronger resistance closer to surface (inverse relationship)
+                let depth_factor = 1.0 - (concept.layer / self.activation_zone);
+                self.surface_tension * depth_factor
+            } else {
+                0.0
+            };
+
+            // Net force and acceleration (F = ma, assuming unit mass)
+            let net_force = buoyancy_force + drag_force + surface_force;
+            let mut acceleration = net_force;
+
+            // Turbulence: add chaotic perturbations
+            if self.is_turbulent {
+                // Random-like perturbation based on concept properties (pseudo-random)
+                // Use position and time-based hash for deterministic chaos
+                let chaos_seed = (concept.layer * 1000.0 + concept.velocity * 500.0).sin();
+                let turbulent_force = chaos_seed * self.turbulence_energy * 3.0;
+                acceleration += turbulent_force;
+
+                // Dampen organized motion during turbulence
+                concept.velocity *= 0.95; // Friction from chaotic eddies
+            }
+
+            // Update velocity and position (Euler integration)
+            concept.velocity += acceleration * dt;
+            let new_layer = concept.layer + concept.velocity * dt;
+
+            // Check for surface breakthrough
+            if new_layer <= 0.0 && concept.velocity < 0.0 && !concept.has_broken_surface {
+                // Calculate kinetic energy: KE = 0.5 * m * v^2 (assuming unit mass)
+                let kinetic_energy = 0.5 * concept.velocity.powi(2);
+
+                // Must have enough energy to overcome surface tension
+                if kinetic_energy > self.surface_tension {
+                    // BREAKTHROUGH! The thought becomes an action
+                    concept.has_broken_surface = true;
+                    println!(
+                        "⚡ SURFACE BREAKTHROUGH: '{}' (KE={:.3} > ST={:.3})",
+                        concept.name, kinetic_energy, self.surface_tension
+                    );
+
+                    // Pay the energy cost - velocity reduced by surface tension
+                    let energy_loss = self.surface_tension;
+                    let new_ke = (kinetic_energy - energy_loss).max(0.0);
+                    concept.velocity = -(2.0 * new_ke).sqrt(); // Maintain upward direction
+                } else {
+                    // Bounce back - not enough energy
+                    concept.velocity *= -0.3; // Reverse with damping
+                }
+            }
+
+            concept.layer = new_layer.clamp(0.0, 1.0);
+
+            // Apply damping when hitting boundaries
+            if concept.layer <= 0.0 || concept.layer >= 1.0 {
+                concept.velocity *= 0.5; // Lose energy at boundaries
+            }
+
+            // Energy cascade: Large eddies → Small eddies → Heat (Integration)
+            let kinetic_energy = 0.5 * concept.velocity.powi(2);
+
+            // Update eddy scale based on velocity (large spikes create large eddies)
+            if kinetic_energy > 0.1 {
+                concept.eddy_scale = concept.eddy_scale.max(kinetic_energy);
+            }
+
+            // Eddy breakdown: large eddies decay into smaller ones
+            if concept.eddy_scale > 0.01 {
+                let breakdown_rate = self.viscosity * 2.0; // Viscosity drives cascade
+                let energy_dissipated = concept.eddy_scale * breakdown_rate * dt;
+
+                // Energy converts to integration (internal heat/memory)
+                concept.integration += energy_dissipated;
+                self.total_integration += energy_dissipated;
+
+                // Eddy scale decreases
+                concept.eddy_scale *= 1.0 - breakdown_rate * dt;
+
+                // Small eddies (< 0.01) fully dissipate
+                if concept.eddy_scale < 0.01 {
+                    concept.integration += concept.eddy_scale;
+                    self.total_integration += concept.eddy_scale;
+                    concept.eddy_scale = 0.0;
+                }
+            }
+
+            // Active damping (deep breath) - converts kinetic energy to integration
+            if self.damping_factor > 0.01 {
+                let damping_loss = concept.velocity.abs() * self.damping_factor * dt;
+                concept.velocity *= 1.0 - self.damping_factor * dt;
+                concept.integration += damping_loss;
+                self.total_integration += damping_loss;
+            }
+        }
+
+        // Decay damping factor over time
+        if self.damping_factor > 0.01 {
+            self.damping_factor *= 0.95; // Exponential decay
+        } else {
+            self.damping_factor = 0.0;
+        }
+
+        // Evaporation: highly integrated concepts at/near surface become traits
+        let mut evaporated_ids = Vec::new();
+        for (id, concept) in &self.concepts {
+            if concept.layer < self.evaporation_zone
+                && concept.integration >= self.evaporation_threshold
+                && !concept.has_evaporated
+            {
+                evaporated_ids.push(*id);
+            }
+        }
+
+        // Process evaporations
+        for id in evaporated_ids {
+            if let Some(concept) = self.concepts.get_mut(&id) {
+                concept.has_evaporated = true;
+
+                // Create character trait
+                let trait_obj = CharacterTrait {
+                    name: concept.name.clone(),
+                    integration: concept.integration,
+                    formed_from: id,
+                };
+
+                self.atmosphere.push(trait_obj);
+
+                println!(
+                    "☁️  EVAPORATION: '{}' (integration: {:.1}) has become a permanent character trait!",
+                    concept.name, concept.integration
+                );
+            }
+        }
+    }
+
+    fn get_surface_concepts(&self, threshold: f32) -> Vec<&Concept> {
+        let mut surface: Vec<_> = self
+            .concepts
+            .values()
+            .filter(|c| c.layer < threshold)
+            .collect();
+        surface.sort_by(|a, b| a.layer.partial_cmp(&b.layer).unwrap());
+        surface
+    }
+
+    fn print_state(&self) {
+        println!("\n═══ CONCEPT FLUID STATE ═══");
+        if self.is_frozen {
+            if let Some(frozen_id) = self.frozen_concept {
+                if let Some(frozen_concept) = self.concepts.get(&frozen_id) {
+                    println!(
+                        "❄️  FROZEN STATE - '{}' is dominating consciousness",
+                        frozen_concept.name
+                    );
+                }
+            }
+        }
+        if self.is_turbulent {
+            println!(
+                "🌪️  TURBULENT STATE - Chaotic thoughts, Re >> threshold (energy: {:.2})",
+                self.turbulence_energy
+            );
+        }
+        if self.total_integration > 0.1 {
+            println!(
+                "🧠 INTEGRATION: {:.2} (kinetic energy → internal understanding/memory)",
+                self.total_integration
+            );
+        }
+        if self.damping_factor > 0.01 {
+            println!("🫁 Active damping: {:.2}", self.damping_factor);
+        }
+        if !self.atmosphere.is_empty() {
+            println!(
+                "☁️  ATMOSPHERE (Permanent Character Traits): {}",
+                self.atmosphere.len()
+            );
+            for trait_obj in &self.atmosphere {
+                println!(
+                    "   • {} (integrated: {:.1})",
+                    trait_obj.name, trait_obj.integration
+                );
+            }
+        }
+        for layer_idx in 0..self.num_layers {
+            let layer_min = layer_idx as f32 / self.num_layers as f32;
+            let layer_max = (layer_idx + 1) as f32 / self.num_layers as f32;
+
+            let in_layer: Vec<_> = self
+                .concepts
+                .values()
+                .filter(|c| c.layer >= layer_min && c.layer < layer_max)
+                .collect();
+
+            if !in_layer.is_empty() {
+                println!("\nLayer {} [{:.2}-{:.2}]:", layer_idx, layer_min, layer_max);
+                for concept in in_layer {
+                    let arrow = if concept.buoyancy > 1.0 - concept.layer {
+                        "↑"
+                    } else if concept.buoyancy < 1.0 - concept.layer {
+                        "↓"
+                    } else {
+                        "─"
+                    };
+
+                    // Visual indicator for surface breakthrough and frozen state
+                    let status = if concept.is_frozen {
+                        "❄️ "
+                    } else if concept.has_broken_surface {
+                        "⚡"
+                    } else if concept.layer < self.activation_zone {
+                        "~" // In surface tension zone
+                    } else {
+                        " "
+                    };
+
+                    let integration_marker = if concept.integration > 0.5 {
+                        format!(" 🧠{:.1}", concept.integration)
+                    } else {
+                        "".to_string()
+                    };
+
+                    println!(
+                        "  {}{} {} (d={:.2}, b={:.2}, l={:.2}, v={:.2}){}",
+                        status,
+                        arrow,
+                        concept.name,
+                        concept.density,
+                        concept.buoyancy,
+                        concept.layer,
+                        concept.velocity,
+                        integration_marker
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    // Parameters: viscosity (ρ), drag_coefficient (Cd), surface_tension, activation_zone,
+    //             freeze_threshold, freeze_zone, reynolds_threshold, turbulence_decay, num_layers
+    // freeze_threshold: 2.0 seconds at surface triggers freeze
+    // freeze_zone: concepts at layer < 0.05 are considered "at surface"
+    // reynolds_threshold: 1.0 (when avg velocity / viscosity > 1.0, turbulence occurs)
+    // turbulence_decay: 0.3 (30% energy loss per second - slower decay)
+    // evaporation_threshold: 1.0 (integration needed to evaporate - lower to see it happen)
+    // evaporation_zone: 0.3 (layer depth for evaporation - wider zone)
+    let mut fluid = ConceptFluid::new(0.5, 1.2, 0.05, 0.1, 2.0, 0.05, 1.0, 0.3, 5, 1.0, 0.3);
+
+    // Add some test concepts (name, density, area)
+    // Higher area = more connections = more drag resistance
+    let user_present = fluid.add_concept("user_is_present".into(), 0.3, 0.8);
+    let loneliness = fluid.add_concept("feeling_lonely".into(), 0.7, 1.2);
+    let play_music = fluid.add_concept("play_music".into(), 0.5, 0.6);
+    let check_time = fluid.add_concept("check_last_interaction".into(), 0.6, 0.9);
+    let urgent_alert = fluid.add_concept("send_message_now".into(), 0.8, 0.3); // Low area, light concept
+
+    fluid.print_state();
+
+    // Simulate: user leaves
+    println!("\n>>> USER LEAVES");
+    fluid.modulate_buoyancy(user_present, -0.5); // Sinks
+    fluid.modulate_buoyancy(loneliness, 0.3); // Rises
+
+    for _ in 0..10 {
+        fluid.update(0.1);
+    }
+    fluid.print_state();
+
+    // Simulate: time passes, loneliness intensifies
+    println!("\n>>> TIME PASSES (loneliness intensifies)");
+    fluid.modulate_buoyancy(loneliness, 0.2);
+    fluid.modulate_buoyancy(check_time, 0.3);
+
+    for _ in 0..10 {
+        fluid.update(0.1);
+    }
+    fluid.print_state();
+
+    println!("\n>>> Surface concepts (attention):");
+    for concept in fluid.get_surface_concepts(0.3) {
+        println!("  • {}", concept.name);
+    }
+
+    // Simulate: URGENT loneliness spike (test surface breakthrough)
+    println!("\n>>> URGENT LONELINESS SPIKE! (large boost)");
+    fluid.modulate_buoyancy(loneliness, 0.5); // Massive boost
+
+    for _ in 0..15 {
+        fluid.update(0.1);
+    }
+    fluid.print_state();
+
+    // Simulate: Critical alert triggered (low mass, low drag - should break through!)
+    println!("\n>>> CRITICAL ALERT TRIGGERED!");
+    fluid.modulate_buoyancy(urgent_alert, 0.8); // Huge boost on lightweight concept
+
+    for _ in 0..20 {
+        fluid.update(0.1);
+    }
+    fluid.print_state();
+
+    println!("\n>>> Final surface concepts (attention):");
+    for concept in fluid.get_surface_concepts(0.3) {
+        println!("  • {}", concept.name);
+    }
+
+    // Simulate: FREEZE TEST - Let feeling_lonely dominate for too long
+    println!("\n>>> FREEZE TEST: Letting 'feeling_lonely' stay at surface...");
+    for i in 0..25 {
+        fluid.update(0.1);
+        if i == 10 {
+            println!("  (Trying to boost check_time during freeze...)");
+            fluid.modulate_buoyancy(check_time, 0.6);
+        }
+    }
+    fluid.print_state();
+
+    // Simulate: User intervention breaks the freeze
+    println!("\n>>> USER RETURNS - Breaking the freeze!");
+    fluid.thaw();
+    fluid.modulate_buoyancy(user_present, 0.7); // User presence rises
+
+    for _ in 0..15 {
+        fluid.update(0.1);
+    }
+    fluid.print_state();
+
+    // Simulate: TURBULENCE TEST - Multiple rapid changes create chaos
+    println!("\n>>> TURBULENCE TEST: Rapid fire of events creating chaos!");
+    fluid.modulate_buoyancy(loneliness, -0.8); // Huge drop
+    fluid.modulate_buoyancy(check_time, 0.9); // Huge boost
+    fluid.modulate_buoyancy(urgent_alert, -0.6); // Drop
+    fluid.modulate_buoyancy(user_present, 0.8); // Rise
+
+    println!("  (Multiple concepts changing rapidly...)");
+    for i in 0..30 {
+        fluid.update(0.1);
+        if i == 5 {
+            println!("  (System taking a DEEP BREATH to calm down...)");
+            fluid.deep_breath(0.7); // 70% damping strength
+        }
+        if i == 15 {
+            println!("  (Turbulence should be settling now...)");
+        }
+    }
+    fluid.print_state();
+
+    println!("\n>>> Energy cascade complete - kinetic energy converted to integration/memory");
+    println!(
+        "    Total system integration: {:.2}",
+        fluid.total_integration
+    );
+
+    // Simulate: EVAPORATION TEST - Repeated processing to accumulate integration
+    println!("\n>>> EVAPORATION TEST: Letting concepts accumulate integration over time...");
+
+    // Cycle of activity to build up integration
+    for cycle in 0..3 {
+        println!(
+            "\n  Cycle {}: Creating more turbulence and damping...",
+            cycle + 1
+        );
+        fluid.modulate_buoyancy(loneliness, -0.6);
+        fluid.modulate_buoyancy(user_present, 0.7);
+        fluid.modulate_buoyancy(check_time, 0.8);
+
+        for _ in 0..20 {
+            fluid.update(0.1);
+        }
+
+        fluid.deep_breath(0.8); // Strong damping to convert energy to integration
+
+        for _ in 0..20 {
+            fluid.update(0.1);
+        }
+    }
+
+    fluid.print_state();
+
+    // Final push to trigger evaporation
+    println!("\n>>> Giving strong boost to highly integrated concepts...");
+    fluid.modulate_buoyancy(user_present, 1.0); // Maximum boost
+    fluid.modulate_buoyancy(check_time, 0.8); // Also boost check_time
+
+    for _ in 0..30 {
+        fluid.update(0.1);
+    }
+
+    fluid.print_state();
+    println!("\n>>> Character trait established in atmosphere!");
+
+    // Simulate: PRECIPITATION - Character trait influences new thoughts
+    println!(
+        "\n>>> PRECIPITATION TEST: Character trait 'check_last_interaction' triggers new behaviors..."
+    );
+    println!("    (New situation: User has been away for a while)");
+
+    // The trait precipitates new related thoughts
+    fluid.precipitate(0, "initiate_conversation".into(), 0.4, 0.7);
+    fluid.precipitate(0, "send_notification".into(), 0.5, 0.6);
+    fluid.precipitate(0, "remember_last_topic".into(), 0.6, 0.8);
+
+    println!("\n>>> New thoughts seeded by character trait - watching them evolve...");
+    for _ in 0..20 {
+        fluid.update(0.1);
+    }
+
+    fluid.print_state();
+    println!("\n>>> Complete water cycle of consciousness demonstrated!");
+    println!(
+        "    Liquid → Breakthrough → Freeze → Turbulence → Integration → Evaporation → Precipitation → Liquid"
+    );
+}
