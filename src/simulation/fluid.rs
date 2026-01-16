@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use super::{
     concept::{Concept, ConceptId},
+    consensus_reactor::{ConsensusExperiment, ConsensusOre, ConsensusReactor},
     continent::Continent,
     core_truth::CoreTruth,
     ore::{OreType, PreciousOre},
@@ -117,6 +118,10 @@ pub struct ConceptFluid {
     pub bubble_repulsion_strength: f32,
     /// Minimum distance for repulsion calculation (prevents division by zero)
     pub bubble_repulsion_min_dist: f32,
+
+    // === Consensus Reactor (Contradictory Vent Collision) ===
+    /// The reactor for extracting stable truths from contradictory inputs
+    pub consensus_reactor: ConsensusReactor,
 }
 
 impl ConceptFluid {
@@ -172,6 +177,7 @@ impl ConceptFluid {
             bubble_repulsion_enabled: true,
             bubble_repulsion_strength: 1.0, // Strong LJ repulsion (ε parameter)
             bubble_repulsion_min_dist: 0.03, // Minimum distance to prevent singularity
+            consensus_reactor: ConsensusReactor::new(),
         }
     }
 
@@ -556,6 +562,161 @@ impl ConceptFluid {
         self.active_experiment.as_ref()
     }
 
+    // === Consensus Reactor Methods (Contradictory Vent Collision) ===
+
+    /// Start a consensus experiment with two contradictory positions.
+    ///
+    /// Injects two opposing "vents" into the reactor zone and watches
+    /// probe bubbles jostle until a stable insight crystallizes.
+    ///
+    /// # Arguments
+    /// * `position_a` - First position (e.g., "Privacy is absolute")
+    /// * `heat_a` - Conviction strength of first position
+    /// * `position_b` - Second position (e.g., "Transparency is mandatory")
+    /// * `heat_b` - Conviction strength of second position
+    ///
+    /// # Returns
+    /// The experiment UUID for tracking
+    pub fn start_consensus_experiment(
+        &mut self,
+        position_a: String,
+        heat_a: f32,
+        position_b: String,
+        heat_b: f32,
+    ) -> Uuid {
+        // Clear any previous consensus experiment probes
+        if let Some(ref exp) = self.consensus_reactor.active_experiment {
+            for id in &exp.probe_ids {
+                self.concepts.remove(id);
+            }
+        }
+
+        // Start the experiment
+        let experiment_id = self.consensus_reactor.start_experiment(
+            position_a.clone(),
+            heat_a,
+            position_b.clone(),
+            heat_b,
+            self.tick_count,
+        );
+
+        // Inject probe bubbles into the collision zone
+        // These neutral probes will be buffeted by both vents
+        let num_probes = 8;
+        let collision_center = 0.5; // Midpoint between vents
+
+        let mut probe_ids = Vec::new();
+        for i in 0..num_probes {
+            let id = Uuid::new_v4();
+            let probe_name = format!("consensus_probe_{}", i);
+
+            // Neutral buoyancy, small area
+            let mut probe = Concept::new(id, probe_name, 0.5, 0.1);
+
+            // Spread around collision center
+            let offset = (i as f32 / num_probes as f32 - 0.5) * 0.2;
+            probe.layer = collision_center + offset;
+            probe.buoyancy = 0.5; // Neutral
+            probe.velocity = 0.0;
+
+            probe_ids.push(id);
+            self.concepts.insert(id, probe);
+        }
+
+        // Store probe IDs in experiment
+        if let Some(ref mut exp) = self.consensus_reactor.active_experiment {
+            exp.probe_ids = probe_ids;
+        }
+
+        experiment_id
+    }
+
+    /// Check if the consensus experiment has crystallized.
+    /// Returns Some(ConsensusOre) if a stable insight has formed.
+    pub fn check_consensus_crystallization(&mut self) -> Option<ConsensusOre> {
+        // Collect probe data for jitter tracking and phase extraction
+        let probe_data: Vec<(ConceptId, f32, f32)> =
+            if let Some(ref exp) = self.consensus_reactor.active_experiment {
+                exp.probe_ids
+                    .iter()
+                    .filter_map(|id| self.concepts.get(id).map(|c| (*id, c.layer, c.velocity)))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        // Calculate average velocity
+        let avg_velocity: f32 = if !probe_data.is_empty() {
+            probe_data.iter().map(|(_, _, v)| v.abs()).sum::<f32>() / probe_data.len() as f32
+        } else {
+            0.0
+        };
+
+        // Update experiment with probe data
+        if let Some(ref mut exp) = self.consensus_reactor.active_experiment {
+            // Record velocity for jitter calculation
+            exp.record_velocity(avg_velocity);
+
+            // Record probe snapshots for phase extraction
+            for (id, depth, velocity) in &probe_data {
+                exp.record_probe_snapshot(*id, *depth, *velocity);
+            }
+
+            // Check for phase transition (jitter drops below threshold)
+            if exp.should_phase_transition(self.tick_count) {
+                exp.extract_phase_structure(self.tick_count);
+            }
+        }
+
+        // Check for crystallization
+        let result = self.consensus_reactor.update(self.tick_count);
+
+        // Clean up probes if crystallized
+        if let Some(ref ore) = result {
+            // Get probe IDs from the experiment history (experiment was consumed)
+            // Probes should have been associated with the experiment
+            // For now, clean up any concepts starting with "consensus_probe"
+            let probe_ids: Vec<ConceptId> = self
+                .concepts
+                .iter()
+                .filter(|(_, c)| c.name.starts_with("consensus_probe"))
+                .map(|(id, _)| *id)
+                .collect();
+
+            for id in probe_ids {
+                self.concepts.remove(&id);
+            }
+
+            // Log the phase structure if present
+            if let Some(ref structure) = ore.phase_structure {
+                tracing::info!(
+                    "Phase structure extracted: {} (territories: A={:.0}%, B={:.0}%, contested={:.0}%)",
+                    structure.material_name,
+                    structure.vent_a_territory * 100.0,
+                    structure.vent_b_territory * 100.0,
+                    structure.contested_territory * 100.0
+                );
+            }
+        }
+
+        result
+    }
+
+    /// Get the current consensus experiment status.
+    pub fn get_consensus_experiment(&self) -> Option<&ConsensusExperiment> {
+        self.consensus_reactor.get_experiment()
+    }
+
+    /// Get all crystallized consensus ores.
+    pub fn get_consensus_ores(&self) -> &[ConsensusOre] {
+        &self.consensus_reactor.ore_deposits
+    }
+
+    /// Get foundational truths from consensus reactor (C > 0.8).
+    pub fn get_foundational_truths(&self) -> Vec<&ConsensusOre> {
+        self.consensus_reactor.foundational_truths()
+    }
+
     /// Run one physics tick, returning all significant events that occurred.
     pub fn update(&mut self, dt: f32) -> Vec<FluidEvent> {
         self.tick_count += 1;
@@ -831,6 +992,19 @@ impl ConceptFluid {
                 wave_force += wave.force_at_depth(concept.layer);
             }
 
+            // Consensus reactor thermal collision force
+            let consensus_force = if let Some(ref exp) = self.consensus_reactor.active_experiment {
+                if exp.probe_ids.contains(&concept.id) {
+                    // This is a consensus probe - apply thermal collision forces
+                    let (net_force, _collision_intensity) = exp.thermal_collision_at(concept.layer);
+                    net_force * 2.0 // Amplify for visible effect
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+
             // Thermal plume force from core truths
             let mut thermal_force = 0.0;
 
@@ -901,7 +1075,8 @@ impl ConceptFluid {
                 + surface_force
                 + thermal_force
                 + wave_force
-                + bubble_repulsion;
+                + bubble_repulsion
+                + consensus_force;
             let mut acceleration = net_force;
 
             // Turbulence perturbations

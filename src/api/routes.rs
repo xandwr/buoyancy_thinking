@@ -38,6 +38,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/divide", post(handlers::start_division))
         .route("/divide/status", get(handlers::get_division_status))
         .route("/divide/results", get(handlers::get_division_results))
+        // === Consensus Reactor (Contradictory Vent Collision) ===
+        .route("/consensus", post(handlers::start_consensus))
+        .route("/consensus/status", get(handlers::get_consensus_status))
+        .route("/consensus/ores", get(handlers::get_consensus_ores))
+        .route("/consensus/truths", get(handlers::get_foundational_truths))
         // === State queries ===
         .route("/state", get(handlers::get_full_state))
         // === Real-time streams ===

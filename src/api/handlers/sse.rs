@@ -44,6 +44,9 @@ pub async fn event_stream(
                 FluidEvent::BenthicExpedition { .. } => "benthic_expedition",
                 FluidEvent::DivisionExperimentStarted { .. } => "division_started",
                 FluidEvent::DivisionExperimentComplete { .. } => "division_complete",
+                FluidEvent::ConsensusExperimentStarted { .. } => "consensus_started",
+                FluidEvent::ConsensusOreCrystallized { .. } => "consensus_crystallized",
+                FluidEvent::PhaseTransition { .. } => "phase_transition",
             };
 
             let json = serde_json::to_string(&event).unwrap_or_default();

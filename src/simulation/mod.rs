@@ -1,4 +1,5 @@
 pub mod concept;
+pub mod consensus_reactor;
 pub mod continent;
 pub mod core_truth;
 pub mod fluid;
@@ -7,6 +8,10 @@ pub mod standing_wave;
 pub mod traits;
 
 pub use concept::{Concept, ConceptId};
+pub use consensus_reactor::{
+    ConsensusExperiment, ConsensusOre, ConsensusOreType, ConsensusReactor, ContradictoryVent,
+    EmergentProperty, FrozenProbe, PhaseStructure, VentDominance, VoronoiCell,
+};
 pub use continent::Continent;
 pub use core_truth::CoreTruth;
 pub use fluid::ConceptFluid;

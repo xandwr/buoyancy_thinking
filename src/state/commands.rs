@@ -58,4 +58,14 @@ pub enum Command {
         salinity_boost: f32,
         response_tx: oneshot::Sender<Uuid>,
     },
+
+    /// Start a consensus experiment (contradictory vent collision)
+    /// Injects two opposing positions and crystallizes stable insight
+    StartConsensusExperiment {
+        position_a: String,
+        heat_a: f32,
+        position_b: String,
+        heat_b: f32,
+        response_tx: oneshot::Sender<Uuid>,
+    },
 }

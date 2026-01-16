@@ -40,6 +40,9 @@ pub async fn run_simulation_loop(
         // Check for division experiment settlement
         let experiment_result = fluid_guard.check_experiment_settlement();
 
+        // Check for consensus crystallization
+        let consensus_result = fluid_guard.check_consensus_crystallization();
+
         // Release lock before broadcasting
         drop(fluid_guard);
 
@@ -64,6 +67,31 @@ pub async fn run_simulation_loop(
                     turbulence_energy: result.turbulence_energy,
                     reynolds_number: result.reynolds_number,
                     ticks_to_settle: result.ticks_to_settle,
+                });
+        }
+
+        // Broadcast consensus crystallization if any
+        if let Some(ore) = consensus_result {
+            info!(
+                "Consensus crystallized: '{}' vs '{}' → {} (certainty: {:.2}, quality: {})",
+                ore.vent_a,
+                ore.vent_b,
+                ore.ore_type.as_str(),
+                ore.certainty,
+                ore.quality()
+            );
+            let _ = channels
+                .event_tx
+                .send(FluidEvent::ConsensusOreCrystallized {
+                    ore_id: ore.id,
+                    name: ore.name.clone(),
+                    ore_type: ore.ore_type.as_str().to_string(),
+                    position_a: ore.vent_a.clone(),
+                    position_b: ore.vent_b.clone(),
+                    certainty: ore.certainty,
+                    quality: ore.quality().to_string(),
+                    insight: ore.insight.clone(),
+                    crystallization_time: ore.crystallization_time,
                 });
         }
 
@@ -231,6 +259,39 @@ fn process_command(
                     divisor,
                     bubble_count: exp.bubble_ids.len(),
                     node_count: exp.wave.node_count(),
+                });
+            }
+
+            let _ = response_tx.send(experiment_id);
+        }
+
+        Command::StartConsensusExperiment {
+            position_a,
+            heat_a,
+            position_b,
+            heat_b,
+            response_tx,
+        } => {
+            let experiment_id = fluid.start_consensus_experiment(
+                position_a.clone(),
+                heat_a,
+                position_b.clone(),
+                heat_b,
+            );
+            info!(
+                "Consensus experiment started: '{}' vs '{}' (id: {})",
+                position_a, position_b, experiment_id
+            );
+
+            // Get experiment details for event
+            if let Some(exp) = fluid.get_consensus_experiment() {
+                let _ = event_tx.send(FluidEvent::ConsensusExperimentStarted {
+                    experiment_id,
+                    position_a,
+                    position_b,
+                    heat_a,
+                    heat_b,
+                    probe_count: exp.probe_ids.len(),
                 });
             }
 

@@ -153,4 +153,40 @@ pub enum FluidEvent {
         reynolds_number: f32,
         ticks_to_settle: u64,
     },
+
+    // === Consensus Reactor Events (Contradictory Vent Collision) ===
+    /// A consensus experiment has started
+    ConsensusExperimentStarted {
+        experiment_id: Uuid,
+        position_a: String,
+        position_b: String,
+        heat_a: f32,
+        heat_b: f32,
+        probe_count: usize,
+    },
+
+    /// Consensus ore has crystallized from contradictory vents
+    ConsensusOreCrystallized {
+        ore_id: Uuid,
+        name: String,
+        ore_type: String,
+        position_a: String,
+        position_b: String,
+        certainty: f32,
+        quality: String,
+        insight: Option<String>,
+        crystallization_time: u64,
+    },
+
+    /// Phase transition occurred - velocity vectors frozen, structure extracted
+    PhaseTransition {
+        experiment_id: Uuid,
+        trigger_jitter: f32,
+        material_name: String,
+        vent_a_territory: f32,
+        vent_b_territory: f32,
+        contested_territory: f32,
+        collision_boundary: f32,
+        emergent_property_count: usize,
+    },
 }
