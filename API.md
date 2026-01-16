@@ -302,3 +302,131 @@ The server starts with:
 │        (Passive Stream)  │   (Willful Acts)             │
 └─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Division Experiments (Analog Computing)
+
+The fluid can perform division using acoustic physics. The divisor creates standing wave nodes, and bubbles (dividend) settle into those nodes. Remainder bubbles that don't fit create measurable turbulence.
+
+### Start Division Experiment
+```http
+POST /divide
+Content-Type: application/json
+
+{
+  "dividend": 7,
+  "divisor": 3,
+  "salinity": 2.0
+}
+```
+
+**Response**:
+```json
+{
+  "experiment_id": "uuid",
+  "dividend": 7.0,
+  "divisor": 3.0,
+  "salinity_boost": 2.0,
+  "expected_quotient": 2.0,
+  "expected_remainder": 1.0,
+  "message": "Injecting 7 bubbles into 3 acoustic nodes. 1 bubbles won't fit → expect turbulence!"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `dividend` | Number of bubbles to inject (1-100) |
+| `divisor` | Acoustic frequency creating nodes (1-20) |
+| `salinity` | Optional damping boost (0-10, default 0) |
+
+### Get Experiment Status
+```http
+GET /divide/status
+```
+
+**Response**:
+```json
+{
+  "active": true,
+  "dividend": 7.0,
+  "divisor": 3.0,
+  "bubble_count": 7,
+  "node_count": 3,
+  "accumulated_turbulence": 45.2,
+  "ticks_elapsed": 180
+}
+```
+
+### Get Results
+```http
+GET /divide/results
+```
+
+**Response**:
+```json
+[
+  {
+    "dividend": 7.0,
+    "divisor": 3.0,
+    "quotient": 2.0,
+    "remainder": 1.0,
+    "is_divisible": false,
+    "peak_jitter": 8.55,
+    "velocity_sigma": 0.023,
+    "turbulence_energy": 156.3,
+    "ticks_to_settle": 300,
+    "node_occupancy": [2, 2, 3],
+    "salinity_boost": 2.0,
+    "interpretation": "7 ÷ 3 = 2 remainder 1 (turbulence detected: 156.30 energy units)"
+  }
+]
+```
+
+### Division Physics
+
+The experiment encodes division as fluid dynamics:
+
+1. **Standing Wave**: Divisor n creates n acoustic nodes at regular depth intervals
+2. **Bubbles**: Dividend V bubbles are injected, each seeking a node
+3. **Pauli Exclusion**: Each node holds at most `quotient = floor(V/n)` bubbles
+4. **Lennard-Jones Repulsion**: Bubbles repel each other, preventing stacking
+5. **Breathing Wave**: Time-varying amplitude keeps the system dynamically active
+
+**Key Metrics**:
+- `peak_jitter`: Maximum velocity variation during settling (higher = more remainder turbulence)
+- `velocity_sigma`: Standard deviation of velocities (micro-cavitation detector)
+- `node_occupancy`: Final distribution of bubbles across nodes
+- `is_divisible`: True if remainder < 0.001
+
+**Interpreting Results**:
+- **Divisible (r=0)**: Bubbles settle evenly into nodes, low jitter
+- **Remainder (r>0)**: "Homeless" bubbles cycle between saturated nodes, creating persistent jitter
+
+Within the same quotient group, remainder cases show ~50-100% higher per-bubble jitter than divisible cases.
+
+### Division Example
+
+```bash
+# Test 6 ÷ 3 = 2 (divisible)
+curl -X POST http://localhost:3000/divide \
+  -H "Content-Type: application/json" \
+  -d '{"dividend": 6, "divisor": 3, "salinity": 2.0}'
+
+# Wait for settlement (~5 seconds)
+sleep 6
+
+# Check result
+curl http://localhost:3000/divide/results | jq '.[-1]'
+# → peak_jitter: ~0.5 (low - clean division)
+
+# Test 7 ÷ 3 = 2 r 1 (remainder)
+curl -X POST http://localhost:3000/divide \
+  -H "Content-Type: application/json" \
+  -d '{"dividend": 7, "divisor": 3, "salinity": 2.0}'
+
+sleep 6
+
+curl http://localhost:3000/divide/results | jq '.[-1]'
+# → peak_jitter: ~8.5 (high - 1 homeless bubble)
+```
