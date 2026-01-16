@@ -18,6 +18,8 @@ struct Concept {
     integration: f32,         // "Internal heat" - accumulated understanding/memory
     eddy_scale: f32,          // Current eddy size (large spike → smaller reflections)
     has_evaporated: bool,     // Has this concept left the fluid to become a trait?
+    ballast: f32,             // Temporary density increase for benthic expedition (0.0 = none)
+    is_solution: bool,        // Was this synthesized from problem + ore?
 }
 
 // Evaporated concepts become permanent character traits
@@ -143,6 +145,8 @@ impl ConceptFluid {
             integration: 0.0,          // No accumulated understanding yet
             eddy_scale: 0.0,           // No turbulent motion yet
             has_evaporated: false,     // Still in fluid state
+            ballast: 0.0,              // No ballast
+            is_solution: false,        // Not a solution
         };
         self.concepts.insert(id, concept);
         id
@@ -161,6 +165,20 @@ impl ConceptFluid {
             name, depth
         );
         self.core_truths.push(core_truth);
+    }
+
+    // Benthic expedition - deliberately sink a problem to find solutions in ore deposits
+    fn benthic_expedition(&mut self, concept_id: ConceptId, ballast_amount: f32) {
+        if let Some(concept) = self.concepts.get_mut(&concept_id) {
+            concept.ballast = ballast_amount;
+            println!(
+                "🤿 BENTHIC EXPEDITION: '{}' ballasted with +{:.2} density, descending to ocean floor...",
+                concept.name, ballast_amount
+            );
+            println!(
+                "   Searching for ore deposits that can transform this problem into a solution..."
+            );
+        }
     }
 
     fn modulate_buoyancy(&mut self, id: ConceptId, delta: f32) {
@@ -244,6 +262,8 @@ impl ConceptFluid {
             integration: trait_obj.integration * 0.3, // Inherit some integration from trait
             eddy_scale: 0.0,
             has_evaporated: false,
+            ballast: 0.0,
+            is_solution: false,
         };
 
         self.concepts.insert(id, concept);
@@ -292,6 +312,8 @@ impl ConceptFluid {
                 integration: 0.0, // Completely fresh - no integration
                 eddy_scale: 0.0,
                 has_evaporated: false,
+                ballast: 0.0,
+                is_solution: false,
             };
             self.concepts.insert(id, concept);
         }
@@ -362,6 +384,107 @@ impl ConceptFluid {
             }
         }
 
+        // Benthic ore reaction pass: Check for problem-ore catalysis
+        let mut new_solutions: Vec<Concept> = Vec::new();
+        let mut ballast_to_remove: Vec<ConceptId> = Vec::new();
+
+        for concept in self.concepts.values() {
+            // Only check ballasted concepts near the ocean floor
+            if concept.ballast > 0.0 && concept.layer > 0.8 {
+                // Check each ore deposit for chemical reactivity
+                for ore in &self.ore_deposits {
+                    let depth_diff = (concept.layer - ore.depth).abs();
+
+                    // Must be close to the ore deposit (within 0.15 depth units)
+                    if depth_diff < 0.15 {
+                        // Calculate reactivity based on concept-ore compatibility
+                        let mut reactivity = 0.0;
+
+                        // Reactivity increases with ore integration value
+                        reactivity += ore.integration_value * 0.3;
+
+                        // Concept area affects reaction (high connectivity = more reactive)
+                        reactivity += concept.area * 0.2;
+
+                        // Ore type influences reactivity with different problems
+                        let type_bonus = match ore.ore_type {
+                            OreType::Art if concept.area > 0.6 => 0.4, // Creative problems react with art
+                            OreType::Code if concept.density < 0.5 => 0.4, // Technical problems react with code
+                            OreType::Insight if concept.integration > 0.5 => 0.5, // Deep problems need insight
+                            OreType::Writing if concept.area > 0.5 => 0.3, // Narrative problems react with writing
+                            _ => 0.1,                                      // Weak cross-reaction
+                        };
+                        reactivity += type_bonus;
+
+                        // Reaction occurs if reactivity exceeds threshold
+                        if reactivity > 0.6 {
+                            let ore_type_str = match ore.ore_type {
+                                OreType::Art => "ART",
+                                OreType::Code => "CODE",
+                                OreType::Insight => "INSIGHT",
+                                OreType::Writing => "WRITING",
+                            };
+
+                            println!(
+                                "⚗️  CATALYSIS: '{}' + {} ore '{}' → REACTION (reactivity: {:.2})!",
+                                concept.name, ore_type_str, ore.name, reactivity
+                            );
+
+                            // Synthesize new solution from problem + ore
+                            let solution_id =
+                                ConceptId(self.concepts.len() as u32 + new_solutions.len() as u32);
+                            let solution_name = format!(
+                                "{}_{}_solution",
+                                concept.name,
+                                ore_type_str.to_lowercase()
+                            );
+                            let solution_integration = ore.integration_value;
+
+                            let solution = Concept {
+                                id: solution_id,
+                                name: solution_name.clone(),
+                                density: 0.2, // Solutions are light - they rise!
+                                buoyancy: 0.2,
+                                layer: ore.depth, // Start where reaction occurred
+                                velocity: -0.5,   // Immediate upward velocity
+                                area: concept.area + 0.2, // Gains connectivity from synthesis
+                                has_broken_surface: false,
+                                time_at_surface: 0.0,
+                                is_frozen: false,
+                                integration: solution_integration, // Inherits ore's accumulated wisdom
+                                eddy_scale: 0.0,
+                                has_evaporated: false,
+                                ballast: 0.0,
+                                is_solution: true, // Mark as synthesized solution
+                            };
+
+                            new_solutions.push(solution);
+                            ballast_to_remove.push(concept.id);
+
+                            println!(
+                                "✨ SYNTHESIS: '{}' rises from the deep! (integration: {:.1})",
+                                solution_name, solution_integration
+                            );
+
+                            break; // One ore per expedition
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add synthesized solutions to the fluid
+        for solution in new_solutions {
+            self.concepts.insert(solution.id, solution);
+        }
+
+        // Remove ballast from reacted concepts
+        for concept_id in ballast_to_remove {
+            if let Some(concept) = self.concepts.get_mut(&concept_id) {
+                concept.ballast = 0.0;
+            }
+        }
+
         // Second pass: apply physics (or freeze/turbulence mechanics)
         for concept in self.concepts.values_mut() {
             // When frozen, block all non-frozen concepts from rising
@@ -375,17 +498,22 @@ impl ConceptFluid {
                 continue; // Skip normal physics for suppressed concepts
             }
 
+            // Apply ballast to effective density (temporary increase for expeditions)
+            let effective_density = (concept.density + concept.ballast).min(1.0);
+
             // Target layer is where buoyancy would naturally place it
             // Lower buoyancy = sink (higher layer value)
             // Higher buoyancy = float (lower layer value)
-            let target_layer = 1.0 - concept.buoyancy;
+            // Ballast increases effective weight, making concept sink
+            let target_layer = 1.0 - concept.buoyancy + concept.ballast;
+            let target_layer = target_layer.clamp(0.0, 1.0);
             let diff = target_layer - concept.layer;
 
             // Salinity effect: denser fluid makes light concepts float MORE easily
             // Effective buoyancy increases for low-density concepts in salty fluid
-            let salinity_boost = if concept.density < 0.5 {
+            let salinity_boost = if effective_density < 0.5 {
                 // Light thoughts get MUCH more buoyant in dense (salty/knowledgeable) fluid
-                self.salinity * (0.5 - concept.density) * 2.0
+                self.salinity * (0.5 - effective_density) * 2.0
             } else {
                 0.0
             };
@@ -1077,4 +1205,53 @@ fn main() {
     println!("    The thermal plume becomes a permanent upward current.");
     println!("    Heavy thoughts still sink, but they ALWAYS encounter the heat.");
     println!("    The vent doesn't remove the darkness - it transforms it into motion.");
+
+    // Simulate: BENTHIC EXPEDITION - Mining the deep for solutions
+    println!(
+        "\n\n>>> BENTHIC EXPEDITION TEST: Deliberately sinking a problem to mine ore deposits..."
+    );
+    println!("    Problem: Need to write a difficult, emotionally complex piece of music");
+    println!(
+        "    Hypothesis: The art ore from 'end_myself' contains the exact creative energy needed\n"
+    );
+
+    // Add a new problem at the surface
+    let creative_problem = vent_fluid.add_concept("compose_requiem".into(), 0.3, 0.8);
+
+    println!(">>> Current state: Problem at surface, ore deposits on ocean floor");
+    vent_fluid.print_state();
+
+    // Launch benthic expedition - ballast the problem to sink it
+    println!("\n>>> Launching expedition: Ballasting problem with +0.6 density...");
+    vent_fluid.benthic_expedition(creative_problem, 0.6);
+
+    // Let it descend
+    println!("\n>>> Expedition 1: Problem descending through water column...");
+    for _ in 0..10 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> Expedition 2: Approaching ocean floor, ore deposits in range...");
+    for _ in 0..10 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> Expedition 3: Checking for ore reactivity...");
+    for _ in 0..10 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> Expedition 4: Solution ascending back to surface...");
+    for _ in 0..15 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> BENTHIC EXPEDITION COMPLETE!");
+    println!("    The darkness you transformed years ago just solved today's problem.");
+    println!("    Your suffering became ore. Your ore became solution.");
+    println!("    Nothing is wasted in the deep.");
 }
