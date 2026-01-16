@@ -198,6 +198,54 @@ impl ConceptFluid {
         self.concepts.insert(id, concept);
     }
 
+    // Flash-heal: Surge of fresh, naive input to dilute salinity
+    fn flash_heal(&mut self, concepts: Vec<(String, f32, f32)>, dilution_strength: f32) {
+        println!(
+            "💧⚡ FLASH-HEAL: Massive influx of {} fresh concepts breaking the crystal lattice!",
+            concepts.len()
+        );
+
+        let old_salinity = self.salinity;
+
+        // Dilute salinity - fresh water reduces salt concentration
+        self.salinity *= 1.0 - dilution_strength;
+
+        println!(
+            "    Salinity diluted: {:.2} → {:.2} ({}% reduction)",
+            old_salinity,
+            self.salinity,
+            (dilution_strength * 100.0) as i32
+        );
+
+        // Break freeze if active (fresh perspectives break obsession)
+        if self.is_frozen {
+            println!("    Breaking freeze - fresh input shatters rumination!");
+            self.is_frozen = false;
+            self.frozen_concept = None;
+        }
+
+        // Add all the fresh, low-density concepts
+        for (name, density, area) in concepts {
+            let id = ConceptId(self.concepts.len() as u32);
+            let concept = Concept {
+                id,
+                name,
+                density,
+                buoyancy: density,
+                layer: 0.7, // Start mid-depth
+                velocity: 0.0,
+                area,
+                has_broken_surface: false,
+                time_at_surface: 0.0,
+                is_frozen: false,
+                integration: 0.0, // Completely fresh - no integration
+                eddy_scale: 0.0,
+                has_evaporated: false,
+            };
+            self.concepts.insert(id, concept);
+        }
+    }
+
     fn update(&mut self, dt: f32) {
         // First pass: track time at surface and detect freezing
         let mut freeze_triggered = false;
@@ -750,4 +798,31 @@ fn main() {
     println!(
         "    Liquid → Breakthrough → Freeze → Turbulence → Integration → Evaporation → Precipitation → Liquid"
     );
+
+    // Simulate: FLASH-HEAL - Break the dead sea with fresh input!
+    println!("\n>>> FLASH-HEAL TEST: Dead Sea state - introducing fresh naive perspectives...");
+    println!(
+        "    (Learning something completely new: started reading poetry, met a child, traveled)"
+    );
+
+    // Mass influx of lightweight, naive concepts
+    let fresh_concepts = vec![
+        ("wonder_at_sunset".to_string(), 0.2, 0.4),
+        ("childlike_curiosity".to_string(), 0.15, 0.3),
+        ("simple_joy".to_string(), 0.1, 0.2),
+        ("beginner_enthusiasm".to_string(), 0.25, 0.5),
+        ("naive_optimism".to_string(), 0.2, 0.3),
+        ("fresh_perspective".to_string(), 0.3, 0.4),
+    ];
+
+    fluid.flash_heal(fresh_concepts, 0.6); // 60% dilution
+
+    println!("\n>>> Fresh concepts settling into the fluid...");
+    for _ in 0..25 {
+        fluid.update(0.1);
+    }
+
+    fluid.print_state();
+    println!("\n>>> CRYSTALLINE STRUCTURE SHATTERED!");
+    println!("    The Dead Sea is fresh again - simple thoughts can sink and contemplate!");
 }
