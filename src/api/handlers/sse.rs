@@ -42,6 +42,8 @@ pub async fn event_stream(
                 FluidEvent::FlashHeal { .. } => "flash_heal",
                 FluidEvent::DeepBreath { .. } => "deep_breath",
                 FluidEvent::BenthicExpedition { .. } => "benthic_expedition",
+                FluidEvent::DivisionExperimentStarted { .. } => "division_started",
+                FluidEvent::DivisionExperimentComplete { .. } => "division_complete",
             };
 
             let json = serde_json::to_string(&event).unwrap_or_default();

@@ -49,4 +49,13 @@ pub enum Command {
         density: f32,
         area: f32,
     },
+
+    /// Start a division experiment (analog computing)
+    /// Salinity boost enables Laminar Streamlining for clearer remainder detection
+    StartDivisionExperiment {
+        dividend: f32,
+        divisor: f32,
+        salinity_boost: f32,
+        response_tx: oneshot::Sender<Uuid>,
+    },
 }

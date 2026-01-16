@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
-use tracing::{Level, info};
-use tracing_subscriber::FmtSubscriber;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 mod api;
 mod runtime;
@@ -16,9 +16,11 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
-    FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+    // Initialize tracing with RUST_LOG support
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_target(false)
         .compact()
         .init();

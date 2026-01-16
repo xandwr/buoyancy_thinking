@@ -131,4 +131,26 @@ pub enum FluidEvent {
         concept_name: String,
         ballast_amount: f32,
     },
+
+    // === Division Experiment Events (Analog Computing) ===
+    /// A division experiment has started
+    DivisionExperimentStarted {
+        experiment_id: Uuid,
+        dividend: f32,
+        divisor: f32,
+        bubble_count: usize,
+        node_count: usize,
+    },
+
+    /// A division experiment has completed
+    DivisionExperimentComplete {
+        dividend: f32,
+        divisor: f32,
+        quotient: f32,
+        remainder: f32,
+        is_divisible: bool,
+        turbulence_energy: f32,
+        reynolds_number: f32,
+        ticks_to_settle: u64,
+    },
 }

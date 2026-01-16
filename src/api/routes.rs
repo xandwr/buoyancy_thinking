@@ -34,6 +34,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/thaw", post(handlers::thaw))
         .route("/breath", post(handlers::deep_breath))
         .route("/flash-heal", post(handlers::flash_heal))
+        // === Division Experiments (Analog Computing) ===
+        .route("/divide", post(handlers::start_division))
+        .route("/divide/status", get(handlers::get_division_status))
+        .route("/divide/results", get(handlers::get_division_results))
         // === State queries ===
         .route("/state", get(handlers::get_full_state))
         // === Real-time streams ===

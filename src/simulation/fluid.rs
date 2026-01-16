@@ -8,6 +8,7 @@ use super::{
     continent::Continent,
     core_truth::CoreTruth,
     ore::{OreType, PreciousOre},
+    standing_wave::{DivisionExperiment, DivisionProblem, DivisionResult, StandingWave},
     traits::CharacterTrait,
 };
 use crate::state::events::FluidEvent;
@@ -87,6 +88,27 @@ pub struct ConceptFluid {
     // === Visualization ===
     /// Number of layers for bucketing
     pub num_layers: usize,
+
+    // === Debug ===
+    /// Total simulation ticks
+    pub tick_count: u64,
+
+    // === Division Experiments (Analog Computing) ===
+    /// Active standing waves for division experiments
+    pub standing_waves: Vec<StandingWave>,
+    /// Currently running division experiment
+    pub active_experiment: Option<DivisionExperiment>,
+    /// Completed experiment results
+    pub experiment_results: Vec<DivisionResult>,
+
+    // === Non-Newtonian Shear-Thinning Model ===
+    /// Base viscosity (at rest)
+    pub base_viscosity: f32,
+    /// Shear-thinning coefficient: how much viscosity drops under shear
+    /// Higher values = more dramatic thinning at high shear rates
+    pub shear_thinning_coefficient: f32,
+    /// Shear rate threshold: velocity gradient above which thinning activates
+    pub shear_threshold: f32,
 }
 
 impl ConceptFluid {
@@ -132,12 +154,37 @@ impl ConceptFluid {
             salinity: 0.0,
             salinity_rate: 0.1,
             num_layers,
+            tick_count: 0,
+            standing_waves: Vec::new(),
+            active_experiment: None,
+            experiment_results: Vec::new(),
+            base_viscosity: viscosity,
+            shear_thinning_coefficient: 0.8, // Default: 80% viscosity reduction at max shear
+            shear_threshold: 0.3,            // Velocity above which thinning kicks in
         }
     }
 
     /// Create a fluid with default parameters.
     pub fn default() -> Self {
         Self::new(0.5, 1.2, 0.05, 0.1, 2.0, 0.05, 1.0, 0.3, 5, 1.0, 0.3)
+    }
+
+    /// Calculate effective viscosity using shear-thinning model.
+    /// High velocity (shear) → lower viscosity → allows "remainder screaming"
+    /// Low velocity → high viscosity → maintains stability
+    pub fn effective_viscosity(&self, velocity: f32) -> f32 {
+        let shear_rate = velocity.abs();
+
+        if shear_rate <= self.shear_threshold {
+            // Below threshold: full viscosity (Newtonian)
+            self.viscosity
+        } else {
+            // Above threshold: shear-thinning (non-Newtonian)
+            // Viscosity drops as shear increases
+            let excess_shear = shear_rate - self.shear_threshold;
+            let thinning_factor = 1.0 - (self.shear_thinning_coefficient * excess_shear).min(0.9);
+            self.viscosity * thinning_factor
+        }
     }
 
     /// Add a new concept to the fluid.
@@ -258,8 +305,230 @@ impl ConceptFluid {
         self.pressure_threshold = threshold;
     }
 
+    // === Division Experiment Methods (Analog Computing) ===
+
+    /// Start a division experiment: encode V ÷ n using standing waves and bubbles.
+    ///
+    /// The standing wave creates nodes at regular intervals (the divisor).
+    /// Bubbles (the dividend) are injected and settle into nodes.
+    /// If V/n is integer → laminar flow (bubbles fill nodes perfectly)
+    /// If V/n has remainder → turbulence (extra bubbles can't find nodes)
+    ///
+    /// The `salinity_boost` parameter enables Laminar Streamlining:
+    /// - Higher salinity → higher effective viscosity → more damping
+    /// - This suppresses "volume overhead" noise from bubble count
+    /// - Making "remainder turbulence" more distinct and measurable
+    pub fn start_division_experiment_with_salinity(
+        &mut self,
+        dividend: f32,
+        divisor: f32,
+        salinity_boost: f32,
+    ) -> Uuid {
+        // Clear any previous experiment
+        if let Some(ref exp) = self.active_experiment {
+            // Remove old bubbles
+            for id in &exp.bubble_ids {
+                self.concepts.remove(id);
+            }
+        }
+        self.standing_waves.clear();
+
+        // Create the problem
+        let problem = DivisionProblem::new(dividend, divisor);
+        let problem_id = problem.id;
+
+        // Create the standing wave (encodes the divisor)
+        let wave = StandingWave::new(divisor, 8.0);
+        self.standing_waves.push(wave.clone());
+
+        // Create the experiment tracker
+        let mut experiment = DivisionExperiment::new(problem, self.tick_count);
+        experiment.wave = wave;
+
+        // Inject bubbles (the dividend) - very buoyant particles
+        for i in 0..dividend as usize {
+            let id = Uuid::new_v4();
+            let bubble_name = format!("bubble_{}", i);
+
+            // Create a light, buoyant bubble
+            let mut bubble = Concept::new(id, bubble_name, 0.15, 0.3);
+            // Spread bubbles across the depth range so they need to find nodes
+            bubble.layer = 0.2 + (i as f32 * 0.1) % 0.6;
+            // Give initial random-ish velocity to ensure physics activates
+            bubble.velocity = 0.1 * ((i as f32 * 0.7).sin());
+
+            experiment.bubble_ids.push(id);
+            self.concepts.insert(id, bubble);
+        }
+
+        // Apply Laminar Streamlining: boost salinity to increase effective viscosity
+        // This dampens the "volume overhead" noise, making remainder turbulence clearer
+        experiment.original_salinity = self.salinity;
+        experiment.salinity_boost = salinity_boost;
+        self.salinity += salinity_boost;
+
+        self.active_experiment = Some(experiment);
+
+        // Reset turbulence state for clean measurement
+        self.is_turbulent = false;
+        self.turbulence_energy = 0.0;
+
+        problem_id
+    }
+
+    /// Start a division experiment with default salinity (no boost).
+    pub fn start_division_experiment(&mut self, dividend: f32, divisor: f32) -> Uuid {
+        self.start_division_experiment_with_salinity(dividend, divisor, 0.0)
+    }
+
+    /// Check if the current experiment has settled (reached equilibrium).
+    pub fn check_experiment_settlement(&mut self) -> Option<DivisionResult> {
+        let experiment = self.active_experiment.as_mut()?;
+
+        // Calculate experiment-specific turbulence from bubble velocities
+        // This measures how much the bubbles are jostling for position
+        let bubble_kinetic_energy: f32 = experiment
+            .bubble_ids
+            .iter()
+            .filter_map(|id| self.concepts.get(id))
+            .map(|c| 0.5 * c.velocity.powi(2))
+            .sum();
+
+        // Accumulate the kinetic energy as a measure of turbulence
+        // More bubbles fighting for nodes = more accumulated energy
+        experiment.accumulated_turbulence += bubble_kinetic_energy;
+
+        experiment.peak_reynolds = experiment.peak_reynolds.max(
+            experiment
+                .bubble_ids
+                .iter()
+                .filter_map(|id| self.concepts.get(id))
+                .map(|c| c.velocity.abs())
+                .sum::<f32>()
+                / self.viscosity,
+        );
+
+        // Check settlement conditions
+        let bubble_velocities: Vec<f32> = experiment
+            .bubble_ids
+            .iter()
+            .filter_map(|id| self.concepts.get(id))
+            .map(|c| c.velocity.abs())
+            .collect();
+
+        let avg_velocity: f32 =
+            bubble_velocities.iter().sum::<f32>() / bubble_velocities.len().max(1) as f32;
+        let max_velocity: f32 = bubble_velocities.iter().copied().fold(0.0, f32::max);
+
+        // Record velocity for jitter analysis (Time-of-Flight Delta measurement)
+        // This captures the "stuttering" / micro-cavitation of remainder bubbles
+        experiment.record_velocity(avg_velocity);
+
+        // Settlement: all bubbles nearly stationary
+        // Require minimum 60 ticks (1 second) before considering settlement
+        let ticks_elapsed = self.tick_count.saturating_sub(experiment.start_tick);
+        let min_ticks_for_settlement = 60;
+        let is_settled =
+            ticks_elapsed >= min_ticks_for_settlement && max_velocity < 0.05 && avg_velocity < 0.02;
+        let is_timed_out = experiment.is_timed_out(self.tick_count);
+
+        if is_settled || is_timed_out {
+            experiment.settled = true;
+            return Some(self.finalize_experiment());
+        }
+
+        None
+    }
+
+    /// Finalize the experiment and calculate the result.
+    fn finalize_experiment(&mut self) -> DivisionResult {
+        let experiment = self.active_experiment.take().unwrap();
+
+        // Calculate node occupancy
+        let mut node_occupancy = vec![0u32; experiment.wave.node_positions.len()];
+        let node_tolerance = experiment.wave.node_spacing / 2.0;
+
+        for bubble_id in &experiment.bubble_ids {
+            if let Some(bubble) = self.concepts.get(bubble_id) {
+                // Find which node this bubble is at
+                for (i, &node_pos) in experiment.wave.node_positions.iter().enumerate() {
+                    if (bubble.layer - node_pos).abs() < node_tolerance {
+                        node_occupancy[i] += 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Calculate turbulence-based remainder
+        // Key insight: extra bubbles that can't fit in nodes create turbulence
+        let mathematical_quotient =
+            (experiment.problem.dividend / experiment.problem.divisor).floor();
+        let mathematical_remainder = experiment.problem.dividend % experiment.problem.divisor;
+
+        // The turbulence energy correlates with remainder
+        // Perfect division → lower turbulence (bubbles settle into nodes)
+        // Remainder r → higher turbulence (extra bubbles jostle)
+        //
+        // Normalize turbulence by ticks to get average energy per tick
+        let ticks = (self.tick_count - experiment.start_tick).max(1) as f32;
+        let _normalized_turbulence = experiment.accumulated_turbulence / ticks;
+
+        let is_divisible = mathematical_remainder < 0.001;
+
+        // Calculate Reynolds number from final state
+        let final_reynolds: f32 = experiment
+            .bubble_ids
+            .iter()
+            .filter_map(|id| self.concepts.get(id))
+            .map(|c| c.velocity.abs())
+            .sum::<f32>()
+            / self.viscosity;
+
+        // Calculate velocity jitter (vσ) - the "Time-of-Flight Delta" metric
+        // High vσ = micro-cavitation / stuttering from remainder bubbles competing for nodes
+        // Low vσ = laminar, predictable flow (divisible case)
+        let (velocity_mean, velocity_sigma) = experiment.calculate_velocity_sigma();
+
+        let result = DivisionResult {
+            dividend: experiment.problem.dividend,
+            divisor: experiment.problem.divisor,
+            is_divisible,
+            quotient: mathematical_quotient,
+            remainder: mathematical_remainder, // Use mathematical for accuracy, turbulence for verification
+            reynolds_number: final_reynolds,
+            velocity_sigma,
+            velocity_mean,
+            peak_jitter: experiment.peak_jitter, // Key metric: captures transient micro-cavitation
+            turbulence_energy: experiment.accumulated_turbulence,
+            ticks_to_settle: self.tick_count - experiment.start_tick,
+            node_occupancy,
+            salinity_boost: experiment.salinity_boost,
+        };
+
+        // Restore original salinity (remove the Laminar Streamlining boost)
+        self.salinity = experiment.original_salinity;
+
+        // Clean up bubbles
+        for id in experiment.bubble_ids {
+            self.concepts.remove(&id);
+        }
+        self.standing_waves.clear();
+
+        // Store result
+        self.experiment_results.push(result.clone());
+
+        result
+    }
+
+    /// Get the current experiment status.
+    pub fn get_experiment_status(&self) -> Option<&DivisionExperiment> {
+        self.active_experiment.as_ref()
+    }
+
     /// Run one physics tick, returning all significant events that occurred.
     pub fn update(&mut self, dt: f32) -> Vec<FluidEvent> {
+        self.tick_count += 1;
         let mut events = Vec::new();
 
         // === Pass 1: Track time at surface and detect freezing ===
@@ -418,8 +687,22 @@ impl ConceptFluid {
 
             let buoyancy_force = diff * concept.density - salinity_boost;
 
+            // Non-Newtonian shear-thinning: effective viscosity drops at high velocity
+            // This allows "remainder bubbles" to scream through local turbulence
+            let effective_visc = {
+                let shear_rate = concept.velocity.abs();
+                if shear_rate <= self.shear_threshold {
+                    self.viscosity
+                } else {
+                    let excess_shear = shear_rate - self.shear_threshold;
+                    let thinning_factor =
+                        1.0 - (self.shear_thinning_coefficient * excess_shear).min(0.9);
+                    self.viscosity * thinning_factor
+                }
+            };
+
             let drag_force = if concept.velocity.abs() > 0.001 {
-                -0.5 * self.viscosity
+                -0.5 * effective_visc
                     * concept.velocity.powi(2)
                     * self.drag_coefficient
                     * concept.area
@@ -434,6 +717,12 @@ impl ConceptFluid {
             } else {
                 0.0
             };
+
+            // Standing wave force (for division experiments)
+            let mut wave_force = 0.0;
+            for wave in &self.standing_waves {
+                wave_force += wave.force_at_depth(concept.layer);
+            }
 
             // Thermal plume force from core truths
             let mut thermal_force = 0.0;
@@ -497,7 +786,8 @@ impl ConceptFluid {
             }
 
             // Net force and acceleration
-            let net_force = buoyancy_force + drag_force + surface_force + thermal_force;
+            let net_force =
+                buoyancy_force + drag_force + surface_force + thermal_force + wave_force;
             let mut acceleration = net_force;
 
             // Turbulence perturbations

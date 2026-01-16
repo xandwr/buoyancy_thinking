@@ -37,8 +37,35 @@ pub async fn run_simulation_loop(
         // Run physics update
         let events = fluid_guard.update(DT);
 
+        // Check for division experiment settlement
+        let experiment_result = fluid_guard.check_experiment_settlement();
+
         // Release lock before broadcasting
         drop(fluid_guard);
+
+        // Broadcast experiment completion if any
+        if let Some(result) = experiment_result {
+            info!(
+                "Division experiment complete: {} ÷ {} = {} remainder {} (turbulence: {:.2})",
+                result.dividend,
+                result.divisor,
+                result.quotient,
+                result.remainder,
+                result.turbulence_energy
+            );
+            let _ = channels
+                .event_tx
+                .send(FluidEvent::DivisionExperimentComplete {
+                    dividend: result.dividend,
+                    divisor: result.divisor,
+                    quotient: result.quotient,
+                    remainder: result.remainder,
+                    is_divisible: result.is_divisible,
+                    turbulence_energy: result.turbulence_energy,
+                    reynolds_number: result.reynolds_number,
+                    ticks_to_settle: result.ticks_to_settle,
+                });
+        }
 
         // Broadcast significant events (ignore errors if no subscribers)
         for event in events {
@@ -181,6 +208,33 @@ fn process_command(
                     inherited_integration: inherited,
                 });
             }
+        }
+
+        Command::StartDivisionExperiment {
+            dividend,
+            divisor,
+            salinity_boost,
+            response_tx,
+        } => {
+            let experiment_id =
+                fluid.start_division_experiment_with_salinity(dividend, divisor, salinity_boost);
+            info!(
+                "Division experiment started: {} ÷ {} (id: {})",
+                dividend, divisor, experiment_id
+            );
+
+            // Get experiment details for event
+            if let Some(exp) = fluid.get_experiment_status() {
+                let _ = event_tx.send(FluidEvent::DivisionExperimentStarted {
+                    experiment_id,
+                    dividend,
+                    divisor,
+                    bubble_count: exp.bubble_ids.len(),
+                    node_count: exp.wave.node_count(),
+                });
+            }
+
+            let _ = response_tx.send(experiment_id);
         }
     }
 }
