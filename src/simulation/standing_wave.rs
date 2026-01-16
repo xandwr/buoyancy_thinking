@@ -3,6 +3,10 @@ use uuid::Uuid;
 
 /// A standing wave creates acoustic nodes at regular intervals.
 /// Bubbles naturally settle into nodes when the system is divisible.
+///
+/// Enhanced with:
+/// - Pauli Exclusion: Nodes have saturation limits
+/// - Breathing: Time-varying amplitude keeps the system alive
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandingWave {
     /// Unique identifier
@@ -11,12 +15,28 @@ pub struct StandingWave {
     pub frequency: f32,
     /// Physical distance between nodes
     pub node_spacing: f32,
-    /// Amplitude of the wave (force strength)
+    /// Base amplitude of the wave (force strength)
     pub amplitude: f32,
     /// Positions of nodes (stable points)
     pub node_positions: Vec<f32>,
     /// Is this wave currently active?
     pub active: bool,
+
+    // === Pauli Exclusion (Node Saturation) ===
+    /// Maximum bubbles per node before repulsion kicks in
+    pub saturation_limit: u32,
+    /// Current occupancy of each node
+    pub node_occupancy: Vec<u32>,
+
+    // === Breathing Wave ===
+    /// Enable time-varying amplitude (respiratory cycle)
+    pub breathing_enabled: bool,
+    /// Breathing frequency (radians per tick)
+    pub breathing_omega: f32,
+    /// Current phase of the breathing cycle
+    pub breathing_phase: f32,
+    /// Breathing depth (0.0 = no variation, 1.0 = full 0-2x amplitude swing)
+    pub breathing_depth: f32,
 }
 
 impl StandingWave {
@@ -33,6 +53,8 @@ impl StandingWave {
             depth += node_spacing;
         }
 
+        let node_count = node_positions.len();
+
         Self {
             id: Uuid::new_v4(),
             frequency: divisor,
@@ -40,27 +62,127 @@ impl StandingWave {
             amplitude,
             node_positions,
             active: true,
+            // Pauli Exclusion: each node can hold (dividend/divisor) bubbles
+            // We'll set this dynamically when starting experiment
+            saturation_limit: 2, // Default: 2 bubbles per node
+            node_occupancy: vec![0; node_count],
+            // Breathing: active respiratory cycle to prevent quick settlement
+            breathing_enabled: true,
+            breathing_omega: 0.15, // Faster cycle (~0.7 seconds) keeps system alive
+            breathing_phase: 0.0,
+            breathing_depth: 0.5, // 50% amplitude variation - more dramatic pulsing
         }
     }
 
+    /// Create with specific saturation limit (for division experiments)
+    pub fn new_with_saturation(divisor: f32, amplitude: f32, saturation_limit: u32) -> Self {
+        let mut wave = Self::new(divisor, amplitude);
+        wave.saturation_limit = saturation_limit;
+        wave
+    }
+
+    /// Advance the breathing cycle by one tick
+    pub fn tick(&mut self) {
+        if self.breathing_enabled {
+            self.breathing_phase += self.breathing_omega;
+            if self.breathing_phase > std::f32::consts::TAU {
+                self.breathing_phase -= std::f32::consts::TAU;
+            }
+        }
+    }
+
+    /// Get current effective amplitude (with breathing modulation)
+    pub fn effective_amplitude(&self) -> f32 {
+        if self.breathing_enabled {
+            // A(t) = A_base × (1.0 + depth × sin(ωt))
+            self.amplitude * (1.0 + self.breathing_depth * self.breathing_phase.sin())
+        } else {
+            self.amplitude
+        }
+    }
+
+    /// Reset node occupancy counts
+    pub fn reset_occupancy(&mut self) {
+        for occ in &mut self.node_occupancy {
+            *occ = 0;
+        }
+    }
+
+    /// Update occupancy based on bubble positions
+    pub fn update_occupancy(&mut self, bubble_depths: &[f32]) {
+        self.reset_occupancy();
+        let tolerance = self.node_spacing / 2.0;
+
+        for &depth in bubble_depths {
+            if let Some(node_idx) = self.nearest_node_index(depth) {
+                let node_pos = self.node_positions[node_idx];
+                if (depth - node_pos).abs() < tolerance {
+                    self.node_occupancy[node_idx] += 1;
+                }
+            }
+        }
+    }
+
+    /// Find the index of the nearest node to a given depth
+    pub fn nearest_node_index(&self, depth: f32) -> Option<usize> {
+        self.node_positions
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (depth - *a)
+                    .abs()
+                    .partial_cmp(&(depth - *b).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(idx, _)| idx)
+    }
+
     /// Calculate the force on a bubble at a given depth.
-    /// Bubbles are attracted toward the nearest node.
+    /// Now includes:
+    /// - Breathing modulation (time-varying amplitude)
+    /// - Pauli Exclusion (saturated nodes repel)
+    /// - Depth-Compensated Attraction (shallow nodes boosted to overcome buoyancy)
     pub fn force_at_depth(&self, depth: f32) -> f32 {
         if !self.active || self.node_positions.is_empty() {
             return 0.0;
         }
 
-        // Find nearest node
-        let nearest_node = self
+        let effective_amp = self.effective_amplitude();
+
+        // Find nearest node and its index
+        let (nearest_idx, nearest_node) = self
             .node_positions
             .iter()
-            .min_by(|a, b| (depth - *a).abs().partial_cmp(&(depth - *b).abs()).unwrap())
-            .copied()
-            .unwrap_or(depth);
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (depth - *a)
+                    .abs()
+                    .partial_cmp(&(depth - *b).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(idx, &pos)| (idx, pos))
+            .unwrap_or((0, depth));
 
-        // Force proportional to distance from node (spring-like)
         let displacement = nearest_node - depth;
-        displacement * self.amplitude
+
+        // === Depth-Compensated Attraction ===
+        // Shallow nodes need slight boost to overcome buoyancy, but not too much
+        // or they'll over-attract. Let LJ repulsion handle distribution.
+        // At depth 0.1, boost = 1.6; at depth 0.9, boost = 1.1
+        let depth_compensation = 1.0 + 0.6 * (1.0 - nearest_node).max(0.0);
+
+        // Check if nearest node is saturated (Pauli Exclusion)
+        let node_occ = self.node_occupancy.get(nearest_idx).copied().unwrap_or(0);
+
+        if node_occ >= self.saturation_limit {
+            // Node is FULL - flip to repulsion!
+            // The harder you try to enter, the harder you're pushed out
+            let repulsion_strength = 10.0; // Very strong repulsion from full nodes
+            -displacement * effective_amp * repulsion_strength * depth_compensation
+        } else {
+            // Node has room - attract with depth compensation
+            displacement * effective_amp * depth_compensation
+        }
     }
 
     /// Check if a depth is at a node (within tolerance).
@@ -73,6 +195,22 @@ impl StandingWave {
     /// Get the number of nodes.
     pub fn node_count(&self) -> usize {
         self.node_positions.len()
+    }
+
+    /// Check if any node is over-saturated (remainder condition)
+    pub fn has_overflow(&self) -> bool {
+        self.node_occupancy
+            .iter()
+            .any(|&occ| occ > self.saturation_limit)
+    }
+
+    /// Count bubbles that couldn't find a home (remainder detection)
+    pub fn homeless_count(&self) -> u32 {
+        self.node_occupancy
+            .iter()
+            .filter(|&&occ| occ > self.saturation_limit)
+            .map(|&occ| occ - self.saturation_limit)
+            .sum()
     }
 }
 
@@ -274,5 +412,39 @@ mod tests {
             let force = wave.force_at_depth(node);
             assert!(force.abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn test_pauli_exclusion() {
+        // Create wave with saturation limit of 2 (like 6÷3=2)
+        let mut wave = StandingWave::new_with_saturation(3.0, 1.0, 2);
+
+        // Initially, nodes should attract
+        let node = wave.node_positions[0];
+        let force_before = wave.force_at_depth(node + 0.05);
+        assert!(force_before > 0.0, "Should attract toward node");
+
+        // Saturate the first node
+        wave.node_occupancy[0] = 2;
+
+        // Now the same position should be repelled
+        let force_after = wave.force_at_depth(node + 0.05);
+        assert!(force_after < 0.0, "Should repel from saturated node");
+    }
+
+    #[test]
+    fn test_breathing_wave() {
+        let mut wave = StandingWave::new(2.0, 1.0);
+        wave.breathing_enabled = true;
+        wave.breathing_depth = 0.5;
+
+        let amp1 = wave.effective_amplitude();
+
+        // Advance phase by π/2 (quarter cycle)
+        wave.breathing_phase = std::f32::consts::FRAC_PI_2;
+        let amp2 = wave.effective_amplitude();
+
+        // At phase π/2, sin = 1, so amplitude should be higher
+        assert!(amp2 > amp1, "Amplitude should vary with breathing");
     }
 }

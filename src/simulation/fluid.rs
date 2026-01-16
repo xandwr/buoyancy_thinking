@@ -109,6 +109,14 @@ pub struct ConceptFluid {
     pub shear_thinning_coefficient: f32,
     /// Shear rate threshold: velocity gradient above which thinning activates
     pub shear_threshold: f32,
+
+    // === Bubble-Bubble Interaction (Social Forces) ===
+    /// Enable repulsive forces between nearby bubbles
+    pub bubble_repulsion_enabled: bool,
+    /// Strength of bubble-bubble repulsion (Coulombic F ∝ 1/r²)
+    pub bubble_repulsion_strength: f32,
+    /// Minimum distance for repulsion calculation (prevents division by zero)
+    pub bubble_repulsion_min_dist: f32,
 }
 
 impl ConceptFluid {
@@ -161,6 +169,9 @@ impl ConceptFluid {
             base_viscosity: viscosity,
             shear_thinning_coefficient: 0.8, // Default: 80% viscosity reduction at max shear
             shear_threshold: 0.3,            // Velocity above which thinning kicks in
+            bubble_repulsion_enabled: true,
+            bubble_repulsion_strength: 1.0, // Strong LJ repulsion (ε parameter)
+            bubble_repulsion_min_dist: 0.03, // Minimum distance to prevent singularity
         }
     }
 
@@ -338,22 +349,41 @@ impl ConceptFluid {
         let problem_id = problem.id;
 
         // Create the standing wave (encodes the divisor)
-        let wave = StandingWave::new(divisor, 8.0);
+        // Saturation limit = quotient: each node can hold exactly (dividend / divisor) bubbles
+        // Remainder bubbles will be "homeless" and keep cycling
+        let quotient = (dividend / divisor).floor() as u32;
+        // High amplitude (15.0) ensures nodes dominate over buoyancy
+        let wave = StandingWave::new_with_saturation(divisor, 15.0, quotient.max(1));
         self.standing_waves.push(wave.clone());
 
         // Create the experiment tracker
         let mut experiment = DivisionExperiment::new(problem, self.tick_count);
         experiment.wave = wave;
 
-        // Inject bubbles (the dividend) - very buoyant particles
+        // Inject bubbles (the dividend) - neutrally buoyant particles
+        // Neutral buoyancy (density=0.5) means wave forces dominate over buoyancy
         for i in 0..dividend as usize {
             let id = Uuid::new_v4();
             let bubble_name = format!("bubble_{}", i);
 
-            // Create a light, buoyant bubble
-            let mut bubble = Concept::new(id, bubble_name, 0.15, 0.3);
-            // Spread bubbles across the depth range so they need to find nodes
-            bubble.layer = 0.2 + (i as f32 * 0.1) % 0.6;
+            // Create a neutrally buoyant bubble (density 0.5 = equilibrium)
+            // Small area (0.1) for tighter Lennard-Jones interactions
+            let mut bubble = Concept::new(id, bubble_name, 0.5, 0.1);
+
+            // Spread bubbles evenly across all node regions
+            // This ensures each node gets a chance to capture bubbles
+            let node_count = experiment.wave.node_count();
+            let node_idx = i % node_count;
+            let node_pos = experiment
+                .wave
+                .node_positions
+                .get(node_idx)
+                .copied()
+                .unwrap_or(0.5);
+            // Start slightly offset from node to trigger motion
+            bubble.layer = node_pos + 0.05 * ((i as f32).sin());
+            bubble.buoyancy = 0.5; // Neutral buoyancy
+
             // Give initial random-ish velocity to ensure physics activates
             bubble.velocity = 0.1 * ((i as f32 * 0.7).sin());
 
@@ -665,6 +695,83 @@ impl ConceptFluid {
         // Collect core truth updates
         let mut core_truth_strengthened: Vec<(usize, f32)> = Vec::new();
 
+        // === Tick standing waves (breathing cycle) ===
+        for wave in &mut self.standing_waves {
+            wave.tick();
+        }
+
+        // === Update standing wave occupancy (for Pauli Exclusion) ===
+        // Collect bubble depths for occupancy calculation
+        let experiment_bubble_ids: Vec<Uuid> = self
+            .active_experiment
+            .as_ref()
+            .map(|exp| exp.bubble_ids.clone())
+            .unwrap_or_default();
+
+        let bubble_depths: Vec<f32> = experiment_bubble_ids
+            .iter()
+            .filter_map(|id| self.concepts.get(id))
+            .map(|c| c.layer)
+            .collect();
+
+        for wave in &mut self.standing_waves {
+            wave.update_occupancy(&bubble_depths);
+        }
+
+        // === Direct Lennard-Jones Repulsion (Symmetric) ===
+        // Apply repulsive forces directly to bubble velocities
+        // This prevents bubbles from stacking - they MUST social distance
+        let sigma = 0.12; // σ = "width" of a thought (larger = more spread)
+        let epsilon = self.bubble_repulsion_strength;
+
+        if self.bubble_repulsion_enabled && !experiment_bubble_ids.is_empty() {
+            let bubble_ids: Vec<Uuid> = experiment_bubble_ids.clone();
+
+            // Pairwise symmetric repulsion
+            for i in 0..bubble_ids.len() {
+                for j in (i + 1)..bubble_ids.len() {
+                    let id_i = bubble_ids[i];
+                    let id_j = bubble_ids[j];
+
+                    // Get current positions
+                    let (pos_i, pos_j) = {
+                        match (self.concepts.get(&id_i), self.concepts.get(&id_j)) {
+                            (Some(a), Some(b)) => (a.layer, b.layer),
+                            _ => continue,
+                        }
+                    };
+
+                    let dist = (pos_i - pos_j).abs();
+
+                    // Only apply force within interaction range
+                    if dist < sigma * 2.5 {
+                        let r = dist.max(self.bubble_repulsion_min_dist);
+
+                        // Lennard-Jones repulsive term: F = 4ε(σ/r)^12
+                        let sr = sigma / r;
+                        let sr12 = sr.powi(12);
+                        let force = (4.0 * epsilon * sr12 * dt).clamp(0.0, 1.0);
+
+                        // Direction: push apart symmetrically
+                        let direction = if pos_i > pos_j { 1.0 } else { -1.0 };
+
+                        if force.is_finite() && force > 0.0001 {
+                            // Apply equal and opposite forces
+                            if let Some(ci) = self.concepts.get_mut(&id_i) {
+                                ci.velocity += direction * force;
+                            }
+                            if let Some(cj) = self.concepts.get_mut(&id_j) {
+                                cj.velocity -= direction * force;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Empty map for compatibility (forces already applied directly)
+        let repulsion_forces: HashMap<ConceptId, f32> = HashMap::new();
+
         for concept in self.concepts.values_mut() {
             // When frozen, block all non-frozen concepts from rising
             if self.is_frozen && !concept.is_frozen {
@@ -785,9 +892,16 @@ impl ConceptFluid {
                 }
             }
 
+            // Bubble-bubble repulsion (Coulombic social force)
+            let bubble_repulsion = repulsion_forces.get(&concept.id).copied().unwrap_or(0.0);
+
             // Net force and acceleration
-            let net_force =
-                buoyancy_force + drag_force + surface_force + thermal_force + wave_force;
+            let net_force = buoyancy_force
+                + drag_force
+                + surface_force
+                + thermal_force
+                + wave_force
+                + bubble_repulsion;
             let mut acceleration = net_force;
 
             // Turbulence perturbations
@@ -798,8 +912,14 @@ impl ConceptFluid {
                 concept.velocity *= 0.95;
             }
 
-            // Update velocity and position
-            concept.velocity += acceleration * dt;
+            // Update velocity and position (with NaN protection)
+            let velocity_delta = acceleration * dt;
+            if velocity_delta.is_finite() {
+                concept.velocity += velocity_delta;
+            }
+            // Clamp velocity to prevent runaway
+            concept.velocity = concept.velocity.clamp(-5.0, 5.0);
+
             let new_layer = concept.layer + concept.velocity * dt;
 
             // Surface breakthrough check
