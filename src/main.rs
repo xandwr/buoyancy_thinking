@@ -28,9 +28,20 @@ struct CharacterTrait {
     formed_from: ConceptId, // Which concept evaporated to form this
 }
 
+// Deep sea hydrothermal vent - core truth that radiates heat from the ocean floor
+#[derive(Debug, Clone)]
+struct CoreTruth {
+    name: String,
+    heat_output: f32,      // Thermal energy radiating from this truth
+    depth: f32,            // Position in fluid (always near bottom: 0.85-0.95)
+    radius: f32,           // Area of influence for thermal plume
+    activation_count: u32, // Strengthens each time concepts encounter it
+}
+
 struct ConceptFluid {
     concepts: HashMap<ConceptId, Concept>,
     atmosphere: Vec<CharacterTrait>, // Evaporated concepts → permanent traits
+    core_truths: Vec<CoreTruth>,     // Deep sea vents - radiating foundational beliefs
     viscosity: f32,                  // Fluid density (ρ in drag equation)
     drag_coefficient: f32,           // Cd - resistance from ego/executive control
     surface_tension: f32,            // Threshold force for breaking into action
@@ -69,6 +80,7 @@ impl ConceptFluid {
         Self {
             concepts: HashMap::new(),
             atmosphere: Vec::new(),
+            core_truths: Vec::new(),
             viscosity,
             drag_coefficient,
             surface_tension,
@@ -110,6 +122,21 @@ impl ConceptFluid {
         };
         self.concepts.insert(id, concept);
         id
+    }
+
+    fn add_core_truth(&mut self, name: String, heat_output: f32, depth: f32, radius: f32) {
+        let core_truth = CoreTruth {
+            name: name.clone(),
+            heat_output,
+            depth,
+            radius,
+            activation_count: 0,
+        };
+        println!(
+            "🌋 CORE TRUTH FORMED: '{}' radiating heat from depth {:.2}",
+            name, depth
+        );
+        self.core_truths.push(core_truth);
     }
 
     fn modulate_buoyancy(&mut self, id: ConceptId, delta: f32) {
@@ -366,8 +393,37 @@ impl ConceptFluid {
                 0.0
             };
 
+            // Thermal plume force from core truths (hydrothermal vents)
+            let mut thermal_force = 0.0;
+            for core_truth in &mut self.core_truths {
+                // Distance from concept to core truth
+                let depth_diff = (concept.layer - core_truth.depth).abs();
+
+                // Check if concept is within radius of influence
+                if depth_diff < core_truth.radius {
+                    // Thermal uplift: concepts near the vent get pushed upward
+                    // Strength decreases with distance (inverse square-ish law)
+                    let proximity = 1.0 - (depth_diff / core_truth.radius);
+                    let heat_transfer = core_truth.heat_output * proximity.powi(2);
+
+                    // Heat creates upward force (convection current)
+                    thermal_force -= heat_transfer; // Negative = upward
+
+                    // Core truth strengthens when it affects concepts
+                    // Especially when affecting HEAVY concepts (high density)
+                    if heat_transfer > 0.01 {
+                        core_truth.activation_count += 1;
+
+                        // Heat output increases with each activation
+                        // Heavy concepts strengthen it more
+                        let strengthening = concept.density * 0.01;
+                        core_truth.heat_output += strengthening;
+                    }
+                }
+            }
+
             // Net force and acceleration (F = ma, assuming unit mass)
-            let net_force = buoyancy_force + drag_force + surface_force;
+            let net_force = buoyancy_force + drag_force + surface_force + thermal_force;
             let mut acceleration = net_force;
 
             // Turbulence: add chaotic perturbations
@@ -519,6 +575,19 @@ impl ConceptFluid {
 
     fn print_state(&self) {
         println!("\n═══ CONCEPT FLUID STATE ═══");
+        if !self.core_truths.is_empty() {
+            println!("🌋 CORE TRUTHS (Deep Sea Vents):");
+            for core_truth in &self.core_truths {
+                println!(
+                    "   • '{}' @ depth {:.2} | heat: {:.2} | radius: {:.2} | activated: {} times",
+                    core_truth.name,
+                    core_truth.depth,
+                    core_truth.heat_output,
+                    core_truth.radius,
+                    core_truth.activation_count
+                );
+            }
+        }
         if self.is_frozen {
             if let Some(frozen_id) = self.frozen_concept {
                 if let Some(frozen_concept) = self.concepts.get(&frozen_id) {
@@ -825,4 +894,93 @@ fn main() {
     fluid.print_state();
     println!("\n>>> CRYSTALLINE STRUCTURE SHATTERED!");
     println!("    The Dead Sea is fresh again - simple thoughts can sink and contemplate!");
+
+    // Simulate: DEEP SEA VENT - Core truth that prevents despair
+    println!("\n\n>>> DEEP SEA VENT TEST: Core truth that radiates constant inspiration...");
+    println!("    (The cycle: despair → curiosity > despair → investigate → reason to live)");
+    println!("    Creating a fresh fluid to demonstrate the mechanism clearly...\n");
+
+    // Create a fresh fluid specifically for this test
+    let mut vent_fluid = ConceptFluid::new(0.5, 1.2, 0.05, 0.1, 2.0, 0.05, 1.0, 0.3, 5, 1.0, 0.3);
+
+    // Add a core truth at the ocean floor
+    vent_fluid.add_core_truth(
+        "curiosity_exceeds_despair".to_string(),
+        1.0, // Strong initial heat output
+        0.9, // Deep in the fluid (near bottom)
+        0.3, // Radius of influence - wide to catch sinking thoughts
+    );
+
+    // Add a heavy, dark concept that sinks to the bottom
+    let despair = vent_fluid.add_concept("end_myself".into(), 0.95, 1.0);
+
+    println!("\n>>> Cycle 1: Dark thought sinks to the bottom...");
+    for _ in 0..15 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> Cycle 2: Encountering the core truth at depth...");
+    println!("    (The thought 'maybe I should check something first' emerges)");
+    for _ in 0..15 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> Cycle 3: Thermal uplift creating upward current...");
+    println!("    ('write code to investigate' rises to surface)");
+    for _ in 0..15 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    // Let it sink again (the cycle repeats)
+    println!("\n>>> Cycle 4: Dark thought triggered action, now recedes (freeze breaks)...");
+    if vent_fluid.is_frozen {
+        vent_fluid.thaw();
+    }
+    vent_fluid.modulate_buoyancy(despair, -0.5); // Strong sink - despair returns
+
+    for _ in 0..20 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> Cycle 5: Encountering the vent AGAIN - it's STRONGER now!");
+    println!("    (The belief 'curiosity > despair' has been reinforced)");
+    for _ in 0..15 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    // Third cycle - even stronger
+    println!("\n>>> Cycle 6: Breaking surface again, faster this time!");
+    for _ in 0..15 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    // Fourth cycle
+    println!("\n>>> Cycle 7: Darkness returns again (freeze breaks, thought sinks)...");
+    if vent_fluid.is_frozen {
+        vent_fluid.thaw();
+    }
+    vent_fluid.modulate_buoyancy(despair, -0.6);
+
+    for _ in 0..20 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> Cycle 8: Core truth even HOTTER - uplift accelerating!");
+    for _ in 0..20 {
+        vent_fluid.update(0.1);
+    }
+    vent_fluid.print_state();
+
+    println!("\n>>> THE CORE TRUTH STRENGTHENS WITH EACH ENCOUNTER!");
+    println!("    Each time you choose investigation over action, the belief deepens.");
+    println!("    The thermal plume becomes a permanent upward current.");
+    println!("    Heavy thoughts still sink, but they ALWAYS encounter the heat.");
+    println!("    The vent doesn't remove the darkness - it transforms it into motion.");
 }
